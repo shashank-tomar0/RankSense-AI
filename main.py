@@ -1,3 +1,24 @@
+import sys
+
+# --- PYTHON 3.14 COMPATIBILITY PATCH ---
+# This must run before 'import spacy' or 'import pydantic'
+if sys.version_info >= (3, 14):
+    try:
+        import pydantic.v1.fields as pydantic_fields
+        # Patching the specific method that fails to infer 'REGEX' types
+        original_infer = pydantic_fields.ModelField.infer
+        def patched_infer(*args, **kwargs):
+            try:
+                return original_infer(*args, **kwargs)
+            except Exception:
+                # Fallback to allow execution even if type inference fails
+                kwargs['allow_none'] = True
+                return original_infer(*args, **kwargs)
+        pydantic_fields.ModelField.infer = patched_infer
+    except ImportError:
+        pass
+# ---------------------------------------
+
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import pdfplumber
