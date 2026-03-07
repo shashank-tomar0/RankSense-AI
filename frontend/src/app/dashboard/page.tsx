@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useUser, useClerk } from "@clerk/nextjs";
-import { Loader2, FileText, Upload, Users, Search, Brain, CheckCircle2, AlertTriangle, ChevronRight, X, Mail, Github, ExternalLink, Activity, Zap, Sparkles, LogOut, Send, Copy, Check, MessageSquare, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Quote, Share2, Download, BarChart3, BookOpen, Info, Shield, Scan, Target, TrendingUp } from "lucide-react";
+import { Loader2, FileText, Upload, Users, Search, Brain, CheckCircle2, AlertTriangle, ChevronRight, X, Mail, Github, ExternalLink, Activity, Zap, Sparkles, LogOut, Send, Copy, Check, MessageSquare, Wand2, Settings2, Trash2, FileCheck2, ShieldAlert, Cpu, Award, Target, BookOpen, ArrowRight, Filter, History, Scan, Shield, TrendingUp, BarChart3, Download, Info, ChevronUp, ChevronDown, Eye, EyeOff, Share2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from 'react-markdown';
 import {
@@ -81,6 +81,12 @@ export default function DashboardPage() {
   const [showJdPrompt, setShowJdPrompt] = useState(false);
   const [jdPromptText, setJdPromptText] = useState("");
   const [showManualEntry, setShowManualEntry] = useState(false);
+  const [showWeights, setShowWeights] = useState(false);
+  const [customWeights, setCustomWeights] = useState<Record<string, number>>({
+    internships: 20, skills: 20, projects: 15, cgpa: 10,
+    achievements: 10, experience: 5, extra_curricular: 5,
+    degree: 3, online_presence: 3, languages: 3, college_rank: 2, school_marks: 2
+  });
   const [manualCandidate, setManualCandidate] = useState<Record<string, any>>({
     name: "Manual Candidate",
     internships: 0,
@@ -92,10 +98,12 @@ export default function DashboardPage() {
     extra_curricular: 0,
     degree: 2,
     online_presence: 0,
-    languages: 0,
-    college_rank: 0,
     school_marks: 0
   });
+
+  const [professionFilter, setProfessionFilter] = useState("All");
+  const [showFraudLog, setShowFraudLog] = useState(false);
+
   const fileRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -168,7 +176,7 @@ export default function DashboardPage() {
     for (const f of fileList) {
       addLog(`> Uploading: ${f.name}`);
       try {
-        await uploadResume(f, jd, companyValues, user.id);
+        await uploadResume(f, jd, companyValues, user.id, customWeights);
         addLog(`✓ Uploaded: ${f.name}`);
       } catch (err: any) {
         addLog(`! Failed: ${f.name}`);
@@ -514,6 +522,49 @@ export default function DashboardPage() {
                 </div>
                 <textarea value={companyValues} onChange={(e) => setCompanyValues(e.target.value)} placeholder="e.g. 'Innovation', 'Collaboration'..." className="w-full h-28 bg-black/40 border border-white/5 rounded-xl text-xs p-4 text-white/80 focus:outline-none focus:border-[var(--cyan)]/50 resize-none leading-relaxed transition-all" />
               </div>
+
+              {/* ── Configurable Weights Panel ── */}
+              <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] p-6 relative overflow-hidden transition-all duration-300">
+                <div className="flex items-center justify-between cursor-pointer group" onClick={() => setShowWeights(!showWeights)}>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-[var(--rose)]/20 border border-[var(--rose)]/40 flex items-center justify-center shadow-[0_0_15px_rgba(244,63,94,0.3)] group-hover:bg-[var(--rose)]/30 transition-colors">
+                      <span className="text-xs font-black text-[var(--rose)]">3</span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-[var(--text)] tracking-tight">Scoring Weights</h3>
+                      <p className="text-[10px] text-[var(--muted)]">Customize how AI evaluates resumes</p>
+                    </div>
+                  </div>
+                  <ChevronRight className={`w-5 h-5 text-[var(--muted)] transition-transform duration-300 ${showWeights ? 'rotate-90' : ''}`} />
+                </div>
+
+                {showWeights && (
+                  <div className="mt-6 space-y-4 animate-in fade-in slide-in-from-top-4">
+                    <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+                      {Object.entries(customWeights).map(([key, value]) => (
+                        <div key={key} className="flex flex-col gap-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[11px] font-bold text-white/80 uppercase tracking-wider">{key.replace('_', ' ')}</span>
+                            <span className="text-[11px] font-mono text-[var(--cyan)] bg-[var(--cyan)]/10 px-1.5 py-0.5 rounded border border-[var(--cyan)]/20">{value}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0" max="40"
+                            value={value}
+                            onChange={(e) => setCustomWeights(p => ({ ...p, [key]: parseInt(e.target.value) }))}
+                            className="w-full accent-[var(--cyan)] h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer hover:bg-white/20 transition-colors"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-6 pt-4 border-t border-white/10 flex justify-between items-center">
+                      <p className="text-[10px] text-[var(--muted)]">Weights auto-normalize to 100% on the backend.</p>
+                      <p className="text-[11px] font-mono font-bold tracking-widest"><span className="text-white/50">RAW TOTAL:</span> <span className={Object.values(customWeights).reduce((a, b) => a + b, 0) === 100 ? "text-[var(--emerald)]" : "text-[var(--cyan)]"}>{Object.values(customWeights).reduce((a, b) => a + b, 0)}</span></p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div onDragOver={(e) => { e.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(e) => { setDragActive(false); onDrop(e); }} onClick={() => fileRef.current?.click()}
                 className={`rounded-2xl border relative overflow-hidden transition-all duration-500 cursor-pointer group flex flex-col min-h-[200px] p-6 ${uploading ? "bg-[var(--emerald)]/5 border-[var(--emerald)]/40 shadow-[0_0_30px_rgba(16,185,129,0.15)]" : dragActive ? "bg-[var(--emerald)]/10 border-[var(--emerald)]/50 transform scale-[1.02]" : "bg-[rgba(255,255,255,0.02)] border-[rgba(255,255,255,0.06)] hover:border-[var(--emerald)]/40 shadow-none"}`}>
                 <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[var(--emerald)] to-transparent opacity-30" />
@@ -528,7 +579,7 @@ export default function DashboardPage() {
                   <>
                     <div className="flex items-center gap-2.5 mb-4">
                       <div className="w-8 h-8 rounded-full bg-[var(--emerald)]/20 border border-[var(--emerald)]/40 flex items-center justify-center shadow-[0_0_15px_rgba(16,185,129,0.3)]">
-                        <span className="text-xs font-black text-[var(--emerald)]">3</span>
+                        <span className="text-xs font-black text-[var(--emerald)]">4</span>
                       </div>
                       <h3 className="text-sm font-bold text-[var(--text)] tracking-tight">Upload Resumes</h3>
                     </div>
@@ -628,79 +679,133 @@ export default function DashboardPage() {
                     {processingCount > 0 && <span className="w-24 text-[var(--cyan)] animate-pulse pl-4">Analyzing...</span>}
                     <span className="w-48 text-right">Primary Skills</span>
                   </div>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <button
+                      onClick={() => setShowFraudLog(!showFraudLog)}
+                      className={`text-[10px] font-bold px-3 py-1.5 rounded border transition-all flex items-center gap-1.5 uppercase tracking-widest ${showFraudLog ? 'bg-[var(--rose)]/20 text-[var(--rose)] border-[var(--rose)]/50 shadow-[0_0_10px_rgba(244,63,94,0.3)]' : 'bg-white/5 text-[var(--muted)] border-white/10 hover:border-white/20'}`}
+                    >
+                      <ShieldAlert className="w-3 h-3" />
+                      Fraud Log
+                    </button>
+                    <div className="w-px h-4 bg-white/10 mx-1" />
+                    <Filter className="w-3 h-3 text-[var(--muted)]" />
+                    <select
+                      value={professionFilter}
+                      onChange={(e) => setProfessionFilter(e.target.value)}
+                      className="bg-transparent text-[10px] font-bold text-white/70 border border-white/10 rounded px-2 py-1 outline-none uppercase tracking-widest hover:border-[var(--cyan)]/50 transition-colors"
+                    >
+                      <option value="All" className="bg-[#0f172a] text-white">ALL DOMAINS</option>
+                      {Array.from(new Set(candidates.map(c => c.profession).filter(Boolean))).map(prof => (
+                        <option key={prof as string} value={prof as string} className="bg-[#0f172a] text-white">{prof as string}</option>
+                      ))}
+                    </select>
+                  </div>
                   <button onClick={purge} className="ml-4 shrink-0 text-[10px] font-bold text-[var(--rose)]/60 hover:text-[var(--rose)] px-3 py-1.5 rounded bg-[rgba(244,63,94,0.05)] hover:bg-[rgba(244,63,94,0.1)] border border-[var(--rose)]/10 hover:border-[var(--rose)]/30 transition-all flex items-center gap-1.5">
                     <Trash2 className="w-3 h-3" /> CLEAR ALL
                   </button>
                 </div>
-                {candidates.map((c, i) => {
-                  const isTop3 = i < 3;
-                  const rankColors = [
-                    'border-[var(--emerald)]/40 bg-[var(--emerald)]/[0.03] shadow-[0_0_20px_rgba(16,185,129,0.1)]',
-                    'border-[var(--cyan)]/40 bg-[var(--cyan)]/[0.03] shadow-[0_0_20px_rgba(6,182,212,0.1)]',
-                    'border-[var(--violet)]/40 bg-[var(--violet)]/[0.03] shadow-[0_0_20px_rgba(124,58,237,0.1)]'
-                  ];
-                  return (
-                    <div key={c.id || i} onClick={() => { setSelected(c); setChatMessages([]); }}
-                      className={`group relative border rounded-xl p-4 flex items-center gap-4 cursor-pointer transition-all duration-300 
+                {candidates
+                  .filter(c => professionFilter === "All" || c.profession === professionFilter)
+                  .filter(c => !showFraudLog || c.prompt_injection_detected || c.is_locked || c.is_duplicate)
+                  .map((c, i) => {
+                    const isTop3 = i < 3;
+                    const rankColors = [
+                      'border-[var(--emerald)]/40 bg-[var(--emerald)]/[0.03] shadow-[0_0_20px_rgba(16,185,129,0.1)]',
+                      'border-[var(--cyan)]/40 bg-[var(--cyan)]/[0.03] shadow-[0_0_20px_rgba(6,182,212,0.1)]',
+                      'border-[var(--violet)]/40 bg-[var(--violet)]/[0.03] shadow-[0_0_20px_rgba(124,58,237,0.1)]'
+                    ];
+                    return (
+                      <div key={c.id || i} onClick={() => { setSelected(c); setChatMessages([]); }}
+                        className={`group relative border rounded-xl p-4 flex items-center gap-4 cursor-pointer transition-all duration-300 
                         ${c.prompt_injection_detected
-                          ? 'bg-[var(--rose)]/10 border-[var(--rose)]/40 shadow-[0_0_20px_rgba(244,63,94,0.2)] animate-pulse'
-                          : isTop3 ? rankColors[i] : 'bg-white/[0.02] border-white/5 hover:bg-[rgba(6,182,212,0.04)] hover:border-[rgba(6,182,212,0.3)]'
-                        }`}>
-                      <div className="w-10 flex justify-center items-center" onClick={(e) => { e.stopPropagation(); toggleSelect(c.file_hash!); }}>
-                        <div className={`w-5 h-5 rounded border transition-all flex items-center justify-center ${selectedIds.includes(c.file_hash!) ? "bg-[var(--cyan)] border-[var(--cyan)] shadow-[0_0_10px_rgba(6,182,212,0.5)]" : "border-white/10 bg-white/5 group-hover:border-[var(--cyan)]/50"}`}>
-                          {selectedIds.includes(c.file_hash!) && <Check className="w-4 h-4 text-black stroke-[4px]" />}
+                            ? 'bg-[var(--rose)]/10 border-[var(--rose)]/40 shadow-[0_0_20px_rgba(244,63,94,0.2)] animate-pulse'
+                            : isTop3 ? rankColors[i] : 'bg-white/[0.02] border-white/5 hover:bg-[rgba(6,182,212,0.04)] hover:border-[rgba(6,182,212,0.3)]'
+                          }`}>
+                        <div className="w-10 flex justify-center items-center" onClick={(e) => { e.stopPropagation(); toggleSelect(c.file_hash!); }}>
+                          <div className={`w-5 h-5 rounded border transition-all flex items-center justify-center ${selectedIds.includes(c.file_hash!) ? "bg-[var(--cyan)] border-[var(--cyan)] shadow-[0_0_10px_rgba(6,182,212,0.5)]" : "border-white/10 bg-white/5 group-hover:border-[var(--cyan)]/50"}`}>
+                            {selectedIds.includes(c.file_hash!) && <Check className="w-4 h-4 text-black stroke-[4px]" />}
+                          </div>
                         </div>
-                      </div>
-                      <div className="w-14 flex justify-center items-center">
-                        <div className={`w-8 h-8 rounded-xl border flex items-center justify-center text-[11px] font-black font-mono transition-colors ${i === 0 ? 'bg-[var(--emerald)]/20 border-[var(--emerald)] text-[var(--emerald)] shadow-[0_0_10px_rgba(16,185,129,0.3)]' : i === 1 ? 'bg-[var(--cyan)]/20 border-[var(--cyan)] text-[var(--cyan)] shadow-[0_0_10px_rgba(6,182,212,0.3)]' : i === 2 ? 'bg-[var(--violet)]/20 border-[var(--violet)] text-[var(--violet)] shadow-[0_0_10px_rgba(124,58,237,0.3)]' : 'bg-white/5 border-white/10 text-white/40 group-hover:text-[var(--cyan)]'}`}>
-                          {i + 1}
+                        <div className="w-14 flex justify-center items-center">
+                          <div className={`w-8 h-8 rounded-xl border flex items-center justify-center text-[11px] font-black font-mono transition-colors ${i === 0 ? 'bg-[var(--emerald)]/20 border-[var(--emerald)] text-[var(--emerald)] shadow-[0_0_10px_rgba(16,185,129,0.3)]' : i === 1 ? 'bg-[var(--cyan)]/20 border-[var(--cyan)] text-[var(--cyan)] shadow-[0_0_10px_rgba(6,182,212,0.3)]' : i === 2 ? 'bg-[var(--violet)]/20 border-[var(--violet)] text-[var(--violet)] shadow-[0_0_10px_rgba(124,58,237,0.3)]' : 'bg-white/5 border-white/10 text-white/40 group-hover:text-[var(--cyan)]'}`}>
+                            {i + 1}
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex-1 px-4 truncate">
-                        <div className="flex items-center gap-2">
-                          <h4 className={`text-sm font-black truncate ${anonymousMode ? "text-[var(--violet)]" : "text-white"}`}>{candidateName(c, i + 1)}</h4>
-                          {c.is_locked && (
-                            <div className="px-2 py-0.5 rounded-md bg-yellow-500/10 border border-yellow-500/30 backdrop-blur-sm flex items-center gap-1 shadow-[0_0_10px_rgba(234,179,8,0.15)]">
-                              <Target className="w-2.5 h-2.5 text-yellow-500 animate-pulse" />
-                              <span className="text-[8px] font-black text-yellow-500 uppercase tracking-widest">LOCKED</span>
+                        <div className="flex-1 px-4 truncate">
+                          <div className="flex items-center gap-2 mb-1">
+                            {c.profession && (
+                              <span className="text-[8px] font-black uppercase tracking-widest text-[var(--cyan)] bg-[var(--cyan)]/10 px-2 py-0.5 rounded border border-[var(--cyan)]/20 shadow-[0_0_5px_rgba(6,182,212,0.2)]">
+                                {c.profession}
+                              </span>
+                            )}
+                            {c.is_fresher && (
+                              <span className="text-[8px] font-black uppercase tracking-widest text-[var(--emerald)] bg-[var(--emerald)]/10 px-2 py-0.5 rounded border border-[var(--emerald)]/20 shadow-[0_0_5px_rgba(16,185,129,0.2)]">
+                                FRESHER
+                              </span>
+                            )}
+                            {!c.is_fresher && c.structured_data?.experience?.years !== undefined && c.structured_data.experience.years > 0 && (
+                              <span className="text-[8px] font-black uppercase tracking-widest text-[var(--violet)] bg-[var(--violet)]/10 px-2 py-0.5 rounded border border-[var(--violet)]/20 shadow-[0_0_5px_rgba(124,58,237,0.2)]">
+                                {c.structured_data.experience.years} YRS EXP
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <h4 className={`text-sm font-black truncate ${anonymousMode ? "text-[var(--violet)]" : "text-white"}`}>{candidateName(c, i + 1)}</h4>
+                            {c.is_locked && (
+                              <div className="px-2 py-0.5 rounded-md bg-yellow-500/10 border border-yellow-500/30 backdrop-blur-sm flex items-center gap-1 shadow-[0_0_10px_rgba(234,179,8,0.15)]">
+                                <Target className="w-2.5 h-2.5 text-yellow-500 animate-pulse" />
+                                <span className="text-[8px] font-black text-yellow-500 uppercase tracking-widest">LOCKED</span>
+                              </div>
+                            )}
+                            {c.is_duplicate && (
+                              <div className="px-2 py-0.5 rounded-md bg-[var(--rose)]/15 border border-[var(--rose)]/40 backdrop-blur-sm flex items-center gap-1 shadow-[0_0_10px_rgba(244,63,94,0.2)]">
+                                <ShieldAlert className="w-2.5 h-2.5 text-[var(--rose)] animate-pulse" />
+                                <span className="text-[8px] font-black text-[var(--rose)] uppercase tracking-widest">DUPLICATE FOUND</span>
+                              </div>
+                            )}
+                            {(c.prompt_injection_detected && !c.is_duplicate) && (
+                              <div className="px-2 py-0.5 rounded-md bg-[var(--rose)]/15 border border-[var(--rose)]/40 backdrop-blur-sm flex items-center gap-1 shadow-[0_0_10px_rgba(244,63,94,0.2)]">
+                                <Shield className="w-2.5 h-2.5 text-[var(--rose)] animate-pulse" />
+                                <span className="text-[8px] font-black text-[var(--rose)] uppercase tracking-widest">MALICIOUS</span>
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-[var(--muted)] truncate font-mono mt-0.5 tracking-tighter opacity-60">
+                            <span className="text-[var(--cyan)]/50">{c.filename || 'unknown'}</span>
+                            <span className="mx-1.5 opacity-30">•</span>
+                            <span>ID: {c.file_hash?.slice(0, 8) || 'PENDING'}</span>
+                          </p>
+                        </div>
+                        <div className="w-32 flex flex-col items-center">
+                          <span className="text-lg font-black text-[var(--cyan)] leading-none">{c.score}</span>
+                          <div className="w-full h-1 bg-white/5 rounded-full mt-2 overflow-hidden"><div className="h-full bg-[var(--cyan)]" style={{ width: `${c.score}%` }} /></div>
+                          {typeof c.completeness === 'number' && (
+                            <div className="flex gap-1 mt-2.5" title={`Completeness Score: ${c.completeness}/4`}>
+                              {[1, 2, 3, 4].map(star => (
+                                <div key={star} className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${star <= c.completeness! ? 'bg-[var(--cyan)] shadow-[0_0_5px_rgba(6,182,212,0.8)] scale-110' : 'bg-white/10'}`} />
+                              ))}
                             </div>
                           )}
-                          {c.prompt_injection_detected && (
-                            <div className="px-2 py-0.5 rounded-md bg-[var(--rose)]/15 border border-[var(--rose)]/40 backdrop-blur-sm flex items-center gap-1 shadow-[0_0_10px_rgba(244,63,94,0.2)]">
-                              <Shield className="w-2.5 h-2.5 text-[var(--rose)] animate-pulse" />
-                              <span className="text-[8px] font-black text-[var(--rose)] uppercase tracking-widest">MALICIOUS</span>
-                            </div>
-                          )}
                         </div>
-                        <p className="text-[10px] text-[var(--muted)] truncate font-mono mt-0.5 tracking-tighter opacity-60">
-                          <span className="text-[var(--cyan)]/50">{c.filename || 'unknown'}</span>
-                          <span className="mx-1.5 opacity-30">•</span>
-                          <span>ID: {c.file_hash?.slice(0, 8) || 'PENDING'}</span>
-                        </p>
+                        <div className="w-48 flex flex-wrap gap-1 justify-end">
+                          {c.prompt_injection_detected ? (
+                            <span className="text-[9px] font-black text-[var(--rose)] bg-[var(--rose)]/10 px-2 py-0.5 rounded border border-[var(--rose)]/20 uppercase animate-pulse">! DATA_REDACTED</span>
+                          ) : c.skills.slice(0, 3).map((s, idx) => {
+                            const colors = [
+                              'bg-[var(--cyan)]/10 text-[var(--cyan)] border-[var(--cyan)]/20',
+                              'bg-[var(--violet)]/10 text-[var(--violet)] border-[var(--violet)]/20',
+                              'bg-[var(--emerald)]/10 text-[var(--emerald)] border-[var(--emerald)]/20'
+                            ];
+                            return (
+                              <span key={s} className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider ${colors[idx % colors.length]} shadow-[0_0_5px_rgba(0,0,0,0.2)]`}>
+                                {s}
+                              </span>
+                            );
+                          })}
+                        </div>
                       </div>
-                      <div className="w-32 flex flex-col items-center">
-                        <span className="text-lg font-black text-[var(--cyan)] leading-none">{c.score}</span>
-                        <div className="w-full h-1 bg-white/5 rounded-full mt-2 overflow-hidden"><div className="h-full bg-[var(--cyan)]" style={{ width: `${c.score}%` }} /></div>
-                      </div>
-                      <div className="w-48 flex flex-wrap gap-1 justify-end">
-                        {c.prompt_injection_detected ? (
-                          <span className="text-[9px] font-black text-[var(--rose)] bg-[var(--rose)]/10 px-2 py-0.5 rounded border border-[var(--rose)]/20 uppercase animate-pulse">! DATA_REDACTED</span>
-                        ) : c.skills.slice(0, 3).map((s, idx) => {
-                          const colors = [
-                            'bg-[var(--cyan)]/10 text-[var(--cyan)] border-[var(--cyan)]/20',
-                            'bg-[var(--violet)]/10 text-[var(--violet)] border-[var(--violet)]/20',
-                            'bg-[var(--emerald)]/10 text-[var(--emerald)] border-[var(--emerald)]/20'
-                          ];
-                          return (
-                            <span key={s} className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider ${colors[idx % colors.length]} shadow-[0_0_5px_rgba(0,0,0,0.2)]`}>
-                              {s}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             )}
             <div className="rounded-2xl border border-white/5 bg-[#020617] overflow-hidden">
@@ -1007,22 +1112,305 @@ export default function DashboardPage() {
                       </div>
                     )}
 
+                    {/* ── RANKING METHODOLOGY ── */}
                     {selected.score_breakdown && (
-                      <div className="space-y-4">
-                        <p className="text-[10px] font-mono text-[var(--muted)] uppercase tracking-widest">Performance Matrix</p>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {Object.entries(selected.score_breakdown).map(([k, v]) => (
-                            <div key={k} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl group/bar">
-                              <div className="flex justify-between items-center mb-2">
-                                <span className="text-[10px] font-black text-white/40 uppercase group-hover/bar:text-[var(--cyan)] transition-colors">{BREAKDOWN_LABELS[k] || k}</span>
-                                <span className="text-xs font-black text-white">{v.score}/{v.max}</span>
-                              </div>
-                              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                                <motion.div initial={{ width: 0 }} animate={{ width: `${(v.score / v.max) * 100}%` }} transition={{ duration: 1, ease: "easeOut" }}
-                                  className="h-full bg-gradient-to-r from-[var(--cyan)] to-[var(--violet)] shadow-[0_0_10px_rgba(6,182,212,0.4)]" />
-                              </div>
+                      <div className="space-y-6">
+                        <div className="bg-black/40 border border-white/5 p-8 rounded-2xl relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-[var(--cyan)] to-[var(--violet)]" />
+                          <div className="flex items-center justify-between mb-6">
+                            <p className="text-[11px] font-black text-[var(--muted)] uppercase tracking-[0.3em] flex items-center gap-3">
+                              <BarChart3 className="w-4 h-4 text-[var(--cyan)]" /> Ranking Methodology
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] font-mono text-white/30 uppercase tracking-widest">12-Factor Weighted Score</span>
+                              <span className="text-xs font-black text-white bg-white/5 px-2.5 py-1 rounded-lg border border-white/10">{selected.score}/100</span>
                             </div>
-                          ))}
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {Object.entries(selected.score_breakdown).map(([k, v]) => {
+                              const pct = v.max > 0 ? (v.score / v.max) * 100 : 0;
+                              const tierColor = pct >= 80 ? 'text-[var(--emerald)]' : pct >= 50 ? 'text-[var(--cyan)]' : pct >= 25 ? 'text-yellow-500' : 'text-[var(--rose)]';
+                              const tierLabel = pct >= 80 ? 'Excellent' : pct >= 50 ? 'Good' : pct >= 25 ? 'Average' : 'Low';
+                              const barColor = pct >= 80 ? 'from-[var(--emerald)] to-[var(--emerald)]' : pct >= 50 ? 'from-[var(--cyan)] to-[var(--violet)]' : pct >= 25 ? 'from-yellow-500 to-yellow-600' : 'from-[var(--rose)] to-[var(--rose)]';
+                              return (
+                                <div key={k} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl group/bar hover:border-white/15 transition-all">
+                                  <div className="flex justify-between items-center mb-1.5">
+                                    <span className="text-[10px] font-black text-white/40 uppercase group-hover/bar:text-[var(--cyan)] transition-colors">{BREAKDOWN_LABELS[k] || k}</span>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`text-[8px] font-black uppercase tracking-widest ${tierColor}`}>{tierLabel}</span>
+                                      <span className="text-xs font-black text-white">{v.score}/{v.max}</span>
+                                    </div>
+                                  </div>
+                                  <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden mb-1.5">
+                                    <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 1, ease: "easeOut" }}
+                                      className={`h-full bg-gradient-to-r ${barColor} shadow-[0_0_10px_rgba(6,182,212,0.4)]`} />
+                                  </div>
+                                  <span className="text-[9px] text-white/30 font-mono">{v.detail}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-5 pt-4 border-t border-white/5">
+                            <p className="text-[9px] text-white/20 font-mono leading-relaxed">
+                              Formula: Internships(20) + Skills(20) + Projects(15) + CGPA(10) + Achievements(10) + Experience(5) + Extra-Curricular(5) + Degree(3) + Online(3) + Languages(3) + College(2) + School(2) = max 98pts → normalized
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── STRUCTURED DATA EXTRACTION ── */}
+                    {selected.structured_data && !selected.prompt_injection_detected && !selected.is_locked && (
+                      <div className="space-y-4">
+                        <div className="bg-black/40 border border-white/5 p-8 rounded-2xl relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-[var(--emerald)] via-[var(--cyan)] to-[var(--violet)]" />
+                          <p className="text-[11px] font-black text-[var(--muted)] uppercase tracking-[0.3em] mb-6 flex items-center gap-3">
+                            <FileText className="w-4 h-4 text-[var(--emerald)]" /> Structured Data Extraction
+                          </p>
+                          <div className="space-y-5">
+
+                            {/* Education */}
+                            {selected.structured_data.education && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[var(--cyan)]" />
+                                  <span className="text-[10px] font-black text-[var(--cyan)] uppercase tracking-widest">Education</span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 ml-4">
+                                  <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3">
+                                    <span className="text-[8px] text-white/30 uppercase tracking-wider block mb-1">Degree</span>
+                                    <span className="text-xs font-bold text-white/80">{selected.structured_data.education.degree || 'N/A'}</span>
+                                  </div>
+                                  <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3">
+                                    <span className="text-[8px] text-white/30 uppercase tracking-wider block mb-1">College</span>
+                                    <span className="text-xs font-bold text-white/80 truncate block">{selected.structured_data.education.college || 'N/A'}</span>
+                                  </div>
+                                  <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3">
+                                    <span className="text-[8px] text-white/30 uppercase tracking-wider block mb-1">CGPA</span>
+                                    <span className="text-xs font-bold text-white/80">{selected.structured_data.education.cgpa || 'N/A'}</span>
+                                  </div>
+                                </div>
+                                {selected.structured_data.education.details && selected.structured_data.education.details.length > 0 && (
+                                  <div className="ml-4 space-y-1 mt-2">
+                                    {selected.structured_data.education.details.map((d, i) => (
+                                      <p key={i} className="text-[10px] text-white/50 pl-3 border-l border-white/10 leading-relaxed">{d}</p>
+                                    ))}
+                                  </div>
+                                )}
+                                {selected.structured_data.education.school_marks && selected.structured_data.education.school_marks.length > 0 && (
+                                  <div className="ml-4 mt-2 flex gap-2">
+                                    {selected.structured_data.education.school_marks.map((m, i) => (
+                                      <span key={i} className="text-[9px] font-mono text-white/50 bg-white/5 px-2 py-1 rounded border border-white/5">
+                                        {i === 0 ? '10th' : '12th'}: {m}%
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Internships */}
+                            {selected.structured_data.internships && (selected.structured_data.internships.count || 0) > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[var(--violet)]" />
+                                  <span className="text-[10px] font-black text-[var(--violet)] uppercase tracking-widest">Internships ({selected.structured_data.internships.count})</span>
+                                </div>
+                                {selected.structured_data.internships.details && selected.structured_data.internships.details.length > 0 ? (
+                                  <div className="ml-4 space-y-1.5">
+                                    {selected.structured_data.internships.details.map((d, i) => (
+                                      <div key={i} className="flex items-start gap-2 text-[10px] text-white/60 bg-white/[0.02] border border-white/5 rounded-lg p-3">
+                                        <span className="text-[var(--violet)] font-black shrink-0">#{i + 1}</span>
+                                        <span className="leading-relaxed">{d}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="ml-4 text-[10px] text-white/30 italic">{selected.structured_data.internships.count} internship(s) detected via keyword analysis</p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Projects */}
+                            {selected.structured_data.projects && (selected.structured_data.projects.count || 0) > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[var(--emerald)]" />
+                                  <span className="text-[10px] font-black text-[var(--emerald)] uppercase tracking-widest">Projects ({selected.structured_data.projects.count})</span>
+                                </div>
+                                {selected.structured_data.projects.titles && selected.structured_data.projects.titles.length > 0 ? (
+                                  <div className="ml-4 space-y-1.5">
+                                    {selected.structured_data.projects.titles.map((t, i) => (
+                                      <div key={i} className="flex items-start gap-2 text-[10px] text-white/60 bg-white/[0.02] border border-white/5 rounded-lg p-3">
+                                        <span className="text-[var(--emerald)] font-black shrink-0">▸</span>
+                                        <span className="leading-relaxed font-medium">{t}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="ml-4 text-[10px] text-white/30 italic">{selected.structured_data.projects.count} project(s) detected via section analysis</p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Experience */}
+                            {selected.structured_data.experience && ((selected.structured_data.experience.years || 0) > 0 || (selected.structured_data.experience.count || 0) > 0) && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[var(--cyan)]" />
+                                  <span className="text-[10px] font-black text-[var(--cyan)] uppercase tracking-widest">Work Experience</span>
+                                </div>
+                                <div className="ml-4 flex gap-3">
+                                  {(selected.structured_data.experience.years || 0) > 0 && (
+                                    <span className="text-[10px] text-white/60 bg-white/[0.03] border border-white/5 px-3 py-1.5 rounded-lg">
+                                      <span className="font-bold text-white/80">{selected.structured_data.experience.years}</span> years
+                                    </span>
+                                  )}
+                                  {(selected.structured_data.experience.count || 0) > 0 && (
+                                    <span className="text-[10px] text-white/60 bg-white/[0.03] border border-white/5 px-3 py-1.5 rounded-lg">
+                                      <span className="font-bold text-white/80">{selected.structured_data.experience.count}</span> roles
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Certifications */}
+                            {selected.structured_data.certifications && selected.structured_data.certifications.length > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                                  <span className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">Certifications ({selected.structured_data.certifications.length})</span>
+                                </div>
+                                <div className="ml-4 flex flex-wrap gap-2">
+                                  {selected.structured_data.certifications.map((c, i) => (
+                                    <span key={i} className="text-[9px] font-bold text-yellow-500/90 bg-yellow-500/10 px-3 py-1.5 rounded-lg border border-yellow-500/20 uppercase tracking-wider">{c}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Awards */}
+                            {selected.structured_data.awards && selected.structured_data.awards.length > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                                  <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest">Awards & Honors ({selected.structured_data.awards.length})</span>
+                                </div>
+                                <div className="ml-4 space-y-1.5">
+                                  {selected.structured_data.awards.map((a, i) => (
+                                    <div key={i} className="text-[10px] text-white/60 pl-3 border-l-2 border-amber-400/30 py-1 leading-relaxed">{a}</div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Languages */}
+                            {selected.structured_data.languages && selected.structured_data.languages.length > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                                  <span className="text-[10px] font-black text-sky-400 uppercase tracking-widest">Languages ({selected.structured_data.languages.length})</span>
+                                </div>
+                                <div className="ml-4 flex flex-wrap gap-2">
+                                  {selected.structured_data.languages.map((l, i) => (
+                                    <span key={i} className="text-[9px] font-bold text-sky-400/90 bg-sky-400/10 px-3 py-1.5 rounded-lg border border-sky-400/20 capitalize">{l}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Publications */}
+                            {selected.structured_data.publications && selected.structured_data.publications.length > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-pink-400" />
+                                  <span className="text-[10px] font-black text-pink-400 uppercase tracking-widest">Publications ({selected.structured_data.publications.length})</span>
+                                </div>
+                                <div className="ml-4 space-y-1.5">
+                                  {selected.structured_data.publications.map((p, i) => (
+                                    <div key={i} className="text-[10px] text-white/60 pl-3 border-l-2 border-pink-400/30 py-1 leading-relaxed italic">{p}</div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Hobbies & Interests */}
+                            {selected.structured_data.hobbies && selected.structured_data.hobbies.length > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+                                  <span className="text-[10px] font-black text-orange-400 uppercase tracking-widest">Hobbies & Interests ({selected.structured_data.hobbies.length})</span>
+                                </div>
+                                <div className="ml-4 flex flex-wrap gap-2">
+                                  {selected.structured_data.hobbies.map((h, i) => (
+                                    <span key={i} className="text-[9px] font-medium text-orange-400/80 bg-orange-400/10 px-3 py-1.5 rounded-full border border-orange-400/20">{h}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Skill Domains Visualization */}
+                            {selected.structured_data.skill_domains && Object.keys(selected.structured_data.skill_domains).length > 0 && (
+                              <div className="space-y-3 mt-4 pt-4 border-t border-white/5">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[var(--cyan)]" />
+                                  <span className="text-[10px] font-black text-[var(--cyan)] uppercase tracking-widest">Skill Domains Taxonomy</span>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 ml-4">
+                                  {Object.entries(selected.structured_data.skill_domains).map(([domain, skills], i) => (
+                                    <div key={i} className="bg-white/[0.02] border border-white/5 p-3 rounded-xl hover:border-[var(--cyan)]/30 transition-colors">
+                                      <span className="text-[9px] font-black text-white/50 uppercase tracking-widest block mb-2">{domain}</span>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {skills.map((s, idx) => (
+                                          <span key={idx} className="text-[9px] font-bold text-[var(--cyan)] bg-[var(--cyan)]/10 px-2 py-0.5 rounded border border-[var(--cyan)]/20 uppercase shadow-[0_0_5px_rgba(6,182,212,0.2)]">
+                                            {s}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Hackathons */}
+                            {(selected.structured_data.hackathon_count || 0) > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-fuchsia-400" />
+                                  <span className="text-[10px] font-black text-fuchsia-400 uppercase tracking-widest">Hackathons & Competitive Coding</span>
+                                </div>
+                                <p className="ml-4 text-[10px] text-white/60 bg-white/[0.02] border border-white/5 rounded-lg p-3">
+                                  <span className="font-bold text-fuchsia-400">{selected.structured_data.hackathon_count}</span> competitive coding / hackathon platforms detected
+                                </p>
+                              </div>
+                            )}
+
+                            {/* Online Presence */}
+                            {selected.structured_data.online_links && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                                  <span className="text-[10px] font-black text-teal-400 uppercase tracking-widest">Online Presence</span>
+                                </div>
+                                <div className="ml-4 flex gap-2">
+                                  {selected.structured_data.online_links.github && (
+                                    <span className="text-[9px] font-bold text-white/70 bg-white/5 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-1.5">
+                                      <Github className="w-3 h-3" /> GitHub {selected.structured_data.github_username && <span className="text-[var(--cyan)]">@{selected.structured_data.github_username}</span>}
+                                    </span>
+                                  )}
+                                  {selected.structured_data.online_links.linkedin && (
+                                    <span className="text-[9px] font-bold text-blue-400/80 bg-blue-400/10 px-3 py-1.5 rounded-lg border border-blue-400/20">LinkedIn</span>
+                                  )}
+                                  {selected.structured_data.online_links.portfolio && (
+                                    <span className="text-[9px] font-bold text-teal-400/80 bg-teal-400/10 px-3 py-1.5 rounded-lg border border-teal-400/20">Portfolio</span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                          </div>
                         </div>
                       </div>
                     )}

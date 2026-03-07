@@ -35,6 +35,27 @@ export interface Candidate {
   jd_analysis: { jd_present: boolean; matches: string[]; missing: string[] } | null;
   score_breakdown: Record<string, { score: number; max: number; detail: string }> | null;
   is_locked?: boolean;
+  profession?: string;
+  is_fresher?: boolean;
+  completeness?: number;
+  is_duplicate?: boolean;
+  structured_data?: {
+    education?: { degree?: string; college?: string; cgpa?: number; school_marks?: number[]; details?: string[] };
+    internships?: { count?: number; details?: string[] };
+    projects?: { count?: number; titles?: string[] };
+    certifications?: string[];
+    awards?: string[];
+    publications?: string[];
+    hobbies?: string[];
+    languages?: string[];
+    skills_list?: string[];
+    experience?: { years?: number; count?: number };
+    extracurricular_count?: number;
+    hackathon_count?: number;
+    online_links?: { github?: boolean; linkedin?: boolean; portfolio?: boolean };
+    github_username?: string;
+    skill_domains?: Record<string, string[]>;
+  } | null;
 }
 
 export async function fetchCandidates(userId: string): Promise<Candidate[]> {
@@ -59,12 +80,13 @@ export async function deleteCandidates(userId: string): Promise<any> {
   }
 }
 
-export async function uploadResume(file: File, jdText?: string, companyValues?: string, userId?: string): Promise<void> {
+export async function uploadResume(file: File, jdText?: string, companyValues?: string, userId?: string, customWeights?: Record<string, number>): Promise<void> {
   const form = new FormData();
   form.append("file", file);
   if (jdText) form.append("jd_text", jdText);
   if (companyValues) form.append("company_values", companyValues);
   if (userId) form.append("user_id", userId);
+  if (customWeights) form.append("custom_weights", JSON.stringify(customWeights));
   const headers: Record<string, string> = {};
   if (userId) headers["X-User-Id"] = userId;
   const res = await fetch(`${API}/upload`, {

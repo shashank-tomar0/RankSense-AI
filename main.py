@@ -185,6 +185,7 @@ class ConnectionManager:
             await connection.send_text(message)
 
 manager = ConnectionManager()
+RESUME_HISTORY = {}  # In-memory store for duplicate detection {file_hash: text}
 
 def fuzzy_match(term, choices, cutoff=0.6):
     matches = difflib.get_close_matches(term, choices, n=1, cutoff=cutoff)
@@ -207,106 +208,283 @@ def normalize_tech_terms(text: str) -> str:
     return t
 
 
-def calculate_candidate_score(extracted, full_text, jd_text=""):
+# ── SKILL DOMAIN TAXONOMY (stolen from competitor + enhanced) ─────────────────
+SKILL_DOMAINS = {
+    "AI & Machine Learning": ["tensorflow", "pytorch", "keras", "scikit-learn", "opencv", "nlp", "deep learning", "machine learning", "neural network", "computer vision", "hugging face", "transformers", "llm", "gpt", "bert", "spacy", "pandas", "numpy", "matplotlib"],
+    "Web Development": ["react", "angular", "vue", "next.js", "node.js", "express", "django", "flask", "fastapi", "html", "css", "javascript", "typescript", "tailwind", "bootstrap", "jquery", "graphql", "rest api", "webpack", "vite"],
+    "Cloud & DevOps": ["aws", "amazon web services", "google cloud", "azure", "docker", "kubernetes", "terraform", "jenkins", "ci/cd", "github actions", "ansible", "nginx", "linux", "prometheus", "grafana", "helm", "cloudformation"],
+    "Data Engineering": ["sql", "postgresql", "mysql", "mongodb", "redis", "elasticsearch", "kafka", "spark", "hadoop", "airflow", "snowflake", "bigquery", "data pipeline", "etl", "data warehouse"],
+    "Mobile Development": ["react native", "flutter", "swift", "kotlin", "android", "ios", "xamarin", "ionic", "dart", "objective-c"],
+    "Cybersecurity": ["penetration testing", "vulnerability", "siem", "firewall", "incident response", "encryption", "oauth", "jwt", "ssl", "tls", "nist", "iso 27001", "cissp", "ceh", "oscp"],
+    "Core Languages": ["python", "java", "c++", "c#", "go", "rust", "ruby", "php", "scala", "r", "matlab", "perl", "haskell", "elixir", "lua"]
+}
+
+def categorize_skills_by_domain(skills_list):
+    """Categorize extracted skills into domains."""
+    result = {}
+    for domain, domain_skills in SKILL_DOMAINS.items():
+        matched = [s for s in skills_list if s.lower() in domain_skills or any(ds in s.lower() for ds in domain_skills)]
+        if matched:
+            result[domain] = matched
+    return result
+
+def infer_profession(text):
+    """Lightweight heuristic classifier for candidate profession/domain."""
+    t = text.lower()
+    # Most specific roles first to prevent keyword shadowing
+    if "cybersecurity" in t or "security analyst" in t or "penetration test" in t:
+        return "Cybersecurity"
+    elif "physician" in t or "medical" in t or "doctor" in t or "healthcare" in t:
+        return "Medical / Healthcare"
+    elif any(kw in t for kw in ["machine learning", "deep learning", "artificial intelligence", "natural language processing", "computer vision", "neural network", "data science"]):
+        return "AI & Machine Learning"
+    elif any(kw in t for kw in ["devops", "cloud engineer", "sre", "site reliability", "infrastructure", "kubernetes", "terraform"]):
+        return "Cloud & DevOps"
+    elif any(kw in t for kw in ["data engineer", "data pipeline", "etl", "data warehouse", "big data", "spark", "hadoop"]):
+        return "Data Engineering"
+    elif any(kw in t for kw in ["android", "ios", "mobile developer", "react native", "flutter", "swift", "kotlin"]):
+        return "Mobile Development"
+    elif any(kw in t for kw in ["frontend", "front-end", "react", "angular", "vue", "ui/ux", "web developer"]):
+        return "Frontend Development"
+    elif any(kw in t for kw in ["backend", "back-end", "server-side", "api development", "microservice"]):
+        return "Backend Development"
+    elif any(kw in t for kw in ["full stack", "fullstack", "full-stack"]):
+        return "Full Stack Development"
+    elif any(kw in t for kw in ["developer", "software", "engineer", "programmer", "coding"]):
+        return "Software Engineering"
+    elif any(kw in t for kw in ["design", "ui", "ux", "graphic", "creative", "figma", "adobe"]):
+        return "Design & Creative"
+    elif any(kw in t for kw in ["marketing", "sales", "seo", "growth", "content"]):
+        return "Marketing & Sales"
+    elif any(kw in t for kw in ["manager", "management", "product", "scrum", "agile"]):
+        return "Business / Management"
+    else:
+        return "General / Uncategorized"
+
+def completeness_score(extracted):
+    """Resume completeness check (0-4). +1 for projects, +1 achievements, +1 online presence, +1 languages."""
+    score = 0
+    if extracted.get('project_count', 0) > 0:
+        score += 1
+    if extracted.get('achievement_count', 0) > 0:
+        score += 1
+    if extracted.get('link_count', 0) > 0:
+        score += 1
+    if extracted.get('language_count', 0) > 0:
+        score += 1
+    return score
+
+def prestige_multiplier(full_text):
+    """Applies a 4-8% score boost for Tier-1 companies/colleges. From SAH v1 architecture."""
+    multiplier = 1.0
+    text_lower = full_text.lower()
+    # Company tier detection
+    if any(c in text_lower for c in TIER_1_COMPANIES):
+        multiplier += 0.08  # 8% boost for FAANG/top-tier
+    elif any(c in text_lower for c in TIER_2_COMPANIES):
+        multiplier += 0.04  # 4% boost for tier-2
+    # College tier detection (already scored, but here as a bonus multiplier)
+    if any(c in text_lower for c in TIER_1_COLLEGES):
+        multiplier += 0.05  # 5% boost
+    return multiplier
+
+def skill_project_consistency(extracted, full_text):
+    """Cross-references claimed skills with project descriptions. From SAH-2.0 architecture."""
+    skills = [s.lower() for s in extracted.get('skills', [])]
+    text_lower = full_text.lower()
+    # Check if skill keywords appear near project-related words
+    project_keywords = ["project", "built", "developed", "implemented", "created", "designed", "deployed", "application", "system", "platform", "model", "website", "tool"]
+    consistent_count = 0
+    for skill in skills[:15]:  # Check top 15 skills
+        # Skill is consistent if it appears within 500 chars of a project keyword
+        positions = [i for i in range(len(text_lower)) if text_lower[i:i+len(skill)] == skill]
+        for pos in positions:
+            context = text_lower[max(0, pos-250):pos+250]
+            if any(pk in context for pk in project_keywords):
+                consistent_count += 1
+                break
+    return min(consistent_count / max(len(skills[:15]), 1), 1.0)  # 0-1 ratio
+
+# Default scoring weights (out of 100 total)
+DEFAULT_WEIGHTS = {
+    "internships": 20, "skills": 20, "projects": 15, "cgpa": 10,
+    "achievements": 10, "experience": 5, "extra_curricular": 5,
+    "degree": 3, "online_presence": 3, "languages": 3, "college_rank": 2, "school_marks": 2
+}
+DEFAULT_MAX = {k: v for k, v in DEFAULT_WEIGHTS.items()}  # max points = weight
+
+def calculate_candidate_score(extracted, full_text, jd_text="", custom_weights=None):
     """
-    Calculates weighted score based on 12 specific factors (Max 98 pts base, normalized to 100 or kept as is).
-    The user's factors sum to 98.
+    Calculates weighted score based on 12 specific factors.
+    Supports configurable weights and fresher/experienced dynamic redistribution.
     """
     breakdown = {}
     analysis = {"matches": [], "missing": [], "jd_present": bool(jd_text.strip())}
 
-    # — 1. Prior Internships (20 pts) — 10 pts per internship (Capped at 2) —
-    internships = extracted.get('internship_count', 0)
-    pts_intern = min(internships * 10.0, 20.0)
+    # ── Use custom weights or defaults, normalize to 100 ──
+    weights = custom_weights.copy() if custom_weights else DEFAULT_WEIGHTS.copy()
+    total_raw = sum(weights.values())
+    if total_raw == 0:
+        total_raw = 1
+    weights = {k: (v / total_raw) * 100 for k, v in weights.items()}
 
-    # — 2. Technical Skills (20 pts) — Base skills + JD Alignment Bonus (using spaCy) —
+    # ── Fresher vs Experienced dynamic redistribution ──
+    exp_years = extracted.get('experience_years', 0)
+    is_fresher = exp_years < 2
+    if not is_fresher:
+        # Shift internship weight → experience
+        weights["experience"] += weights.get("internships", 0)
+        weights["internships"] = 0
+        # Shift extracurricular + school → skills + achievements
+        extra_pool = weights.get("extra_curricular", 0) + weights.get("school_marks", 0)
+        weights["skills"] += extra_pool * 0.6
+        weights["achievements"] += extra_pool * 0.4
+        weights["extra_curricular"] = 0
+        weights["school_marks"] = 0
+
+    # ── Calculate raw percentage earned per criterion ──
+    # Each criterion: compute percentage earned (0.0-1.0), then multiply by its weight
+
+    # 1. Internships
+    internships = extracted.get('internship_count', 0)
+    pct_intern = min(internships / 2.0, 1.0)  # 2 internships = 100%
+
+    # 2. Technical Skills
     skills_list = extracted.get('skills', [])
-    base_skill_pts = min(float(len(skills_list)) * 0.5, 10.0) # 0.5 pt per skill, cap at 10
+    partial_skills_list = extracted.get('partial_skills', [])
+    all_skills = extracted.get('all_skills', skills_list + partial_skills_list)
     
-    jd_bonus = 0.0
+    # Partial skills give 0.5 credit
+    total_skill_points = len(skills_list) + (len(partial_skills_list) * 0.5)
+    base_skill_pct = min(total_skill_points / 20.0, 0.5)  # 20 points = 50% base
+    
+    jd_bonus_pct = 0.0
     if analysis["jd_present"] and nlp:
-        # Semantic matching with spaCy
         jd_doc = nlp(jd_text.lower())
-        skills_text = " ".join(skills_list).lower()
+        skills_text = " ".join(all_skills).lower()
         skills_doc = nlp(skills_text)
-        
         if jd_doc.vector_norm and skills_doc.vector_norm:
             similarity = jd_doc.similarity(skills_doc)
-            jd_bonus = min(similarity * 10.0, 10.0)
-            
-        # Traditional keyword matching for analysis reporting
+            jd_bonus_pct = min(similarity, 0.5)
         jd_keywords = [s.lower() for s in SKILLS_TAXONOMY if s.lower() in jd_text.lower()]
-        analysis["matches"] = [s for s in skills_list if s.lower() in jd_keywords]
-        analysis["missing"] = [s for s in jd_keywords if s.lower() not in [sk.lower() for sk in skills_list]]
+        analysis["matches"] = [s for s in all_skills if s.lower() in jd_keywords]
+        analysis["missing"] = [s for s in jd_keywords if s.lower() not in [sk.lower() for sk in all_skills]]
     elif analysis["jd_present"]:
-        # Fallback keyword-only bonus if spaCy failed
         jd_keywords = [s.lower() for s in SKILLS_TAXONOMY if s.lower() in jd_text.lower()]
-        matches = [s for s in skills_list if s.lower() in jd_keywords]
+        matches = [s for s in all_skills if s.lower() in jd_keywords]
         if jd_keywords:
-            jd_bonus = min((len(matches) / len(jd_keywords)) * 10.0, 10.0)
-    
-    pts_skills = base_skill_pts + jd_bonus
+            jd_bonus_pct = min((len(matches) / len(jd_keywords)) * 0.5, 0.5)
+    pct_skills = min(base_skill_pct + jd_bonus_pct, 1.0)
 
-    # — 3. Projects (15 pts) — 5 pts per project (Capped at 3) —
+    # 3. Projects
     projects = extracted.get('project_count', 0)
-    pts_proj = min(projects * 5.0, 15.0)
-    
-    # — 4. CGPA / Academic (10 pts) — Linear scale (8.0 CGPA = 8 pts) —
+    pct_proj = min(projects / 3.0, 1.0)  # 3 projects = 100%
+
+    # 4. CGPA
     cgpa = extracted.get('cgpa', 0.0)
     if 0 < cgpa <= 4.0:
-        pts_cgpa = round(min(cgpa * 2.5, 10.0), 2)
+        pct_cgpa = min(cgpa / 4.0, 1.0)
     elif 0 < cgpa <= 10.0:
-        pts_cgpa = round(min(cgpa * 1.0, 10.0), 2)
+        pct_cgpa = min(cgpa / 10.0, 1.0)
     else:
-        pts_cgpa = 0.0
+        pct_cgpa = 0.0
 
-    # — 5. Quantifiable Achievements (10 pts) — 2 pts per achievement —
+    # 5. Achievements
     achievements = extracted.get('achievement_count', 0)
-    pts_ach = min(achievements * 2.0, 10.0)
+    pct_ach = min(achievements / 5.0, 1.0)
 
-    # — 6. Work Experience (5 pts) — Weighted based on years and roles —
-    exp_years = extracted.get('experience_years', 0)
-    pts_exp = min(exp_years * 1.0, 5.0)
+    # 6. Experience
+    pts_exp_raw = min(exp_years * 1.0, 5.0)
+    pct_exp = pts_exp_raw / 5.0 if not is_fresher else min(exp_years / 2.0, 1.0)
 
-    # — 7. Extra-Curricular (5 pts) — NSS, clubs, sports —
+    # 7. Extra-Curricular
     extra = extracted.get('extra_count', 0)
-    pts_extra = min(extra * 1.0, 5.0)
+    pct_extra = min(extra / 5.0, 1.0)
 
-    # — 8. Degree Quality (3 pts) — 3 (Masters/PhD), 2 (Bachelors), 1 (Diploma) —
-    degree_pts = float(extracted.get('degree_score', 1))
+    # 8. Degree
+    degree_raw = float(extracted.get('degree_score', 1))
+    pct_degree = degree_raw / 3.0
 
-    # — 9. Online Presence (3 pts) — GitHub (Verified), LinkedIn, Portfolios —
+    # 9. Online Presence
     links = extracted.get('link_count', 0)
-    pts_links = min(links * 1.0, 3.0)
+    pct_links = min(links / 3.0, 1.0)
 
-    # — 10. Language Fluency (3 pts) — 1 pt per language, max 3 —
+    # 10. Languages
     langs = extracted.get('language_count', 0)
-    pts_lang = min(langs * 1.0, 3.0)
+    pct_lang = min(langs / 3.0, 1.0)
 
-    # — 11. College Tier (2 pts) — 2 (Tier 1), 1 (Tier 2/NITs) —
-    college_pts = float(extracted.get('college_tier_score', 0))
+    # 11. College Tier
+    college_raw = float(extracted.get('college_tier_score', 0))
+    pct_college = college_raw / 2.0
 
-    # — 12. School Marks (2 pts) — Performance in 10th/12th (Scale 0-2) —
-    school_pts = float(extracted.get('school_marks_score', 0))
+    # 12. School Marks
+    school_raw = float(extracted.get('school_marks_score', 0))
+    pct_school = school_raw / 2.0
 
-    breakdown = {
-        "internships": {"score": round(pts_intern, 2), "max": 20, "detail": f"{internships} detected"},
-        "skills": {"score": round(pts_skills, 2), "max": 20, "detail": f"{len(skills_list)} skills + JD alignment"},
-        "projects": {"score": round(pts_proj, 2), "max": 15, "detail": f"{projects} detected"},
-        "cgpa": {"score": pts_cgpa, "max": 10, "detail": f"CGPA {cgpa}"},
-        "achievements": {"score": pts_ach, "max": 10, "detail": f"{achievements} detected"},
-        "experience": {"score": pts_exp, "max": 5, "detail": f"{exp_years} yrs exp"},
-        "extra_curricular": {"score": pts_extra, "max": 5, "detail": f"{extra} activities"},
-        "degree": {"score": degree_pts, "max": 3, "detail": "Postgrad" if degree_pts==3 else "Undergrad" if degree_pts==2 else "Diploma"},
-        "online_presence": {"score": pts_links, "max": 3, "detail": f"{links} profiles"},
-        "languages": {"score": pts_lang, "max": 3, "detail": f"{langs} languages"},
-        "college_rank": {"score": college_pts, "max": 2, "detail": "Tier 1" if college_pts==2 else "Tier 2" if college_pts==1 else "Other"},
-        "school_marks": {"score": school_pts, "max": 2, "detail": "Analyzed"}
+    # ── Apply weights ──
+    earned = {
+        "internships": round(pct_intern * weights["internships"], 2),
+        "skills": round(pct_skills * weights["skills"], 2),
+        "projects": round(pct_proj * weights["projects"], 2),
+        "cgpa": round(pct_cgpa * weights["cgpa"], 2),
+        "achievements": round(pct_ach * weights["achievements"], 2),
+        "experience": round(pct_exp * weights["experience"], 2),
+        "extra_curricular": round(pct_extra * weights["extra_curricular"], 2),
+        "degree": round(pct_degree * weights["degree"], 2),
+        "online_presence": round(pct_links * weights["online_presence"], 2),
+        "languages": round(pct_lang * weights["languages"], 2),
+        "college_rank": round(pct_college * weights["college_rank"], 2),
+        "school_marks": round(pct_school * weights["school_marks"], 2),
     }
-    
-    total_pos = sum(v["score"] for v in breakdown.values())
-    final_score = round(max(0, min(100, total_pos)), 2)
-    return final_score, analysis, breakdown
+
+    # ── Build breakdown ──
+    detail_map = {
+        "internships": f"{internships} detected",
+        "skills": f"{len(skills_list)} expert, {len(partial_skills_list)} partial + JD match",
+        "projects": f"{projects} detected",
+        "cgpa": f"CGPA {cgpa}",
+        "achievements": f"{achievements} detected",
+        "experience": f"{exp_years} yrs {'(fresher)' if is_fresher else '(experienced)'}",
+        "extra_curricular": f"{extra} activities",
+        "degree": "Postgrad" if degree_raw==3 else "Undergrad" if degree_raw==2 else "Diploma",
+        "online_presence": f"{links} profiles",
+        "languages": f"{langs} languages",
+        "college_rank": "Tier 1" if college_raw==2 else "Tier 2" if college_raw==1 else "Other",
+        "school_marks": "Analyzed"
+    }
+    for key in earned:
+        breakdown[key] = {
+            "score": earned[key],
+            "max": round(weights[key], 2),
+            "detail": detail_map.get(key, "")
+        }
+
+    # ── Completeness bonus (4% per point) ──
+    comp = completeness_score(extracted)
+    raw_total = sum(earned.values())
+    total_with_bonus = raw_total * (1 + 0.04 * comp)
+
+    # ── Prestige multiplier (company + college tier boost) ──
+    total_with_prestige = total_with_bonus * prestige_multiplier(full_text)
+
+    # ── Skill-project consistency bonus (up to +3 pts) ──
+    consistency = skill_project_consistency(extracted, full_text)
+    total_with_consistency = total_with_prestige + (consistency * 3.0)
+
+    # ── Profession inference ──
+    profession = infer_profession(full_text)
+
+    final_score = round(max(0, min(100, total_with_consistency)), 2)
+
+    # ── Attach metadata ──
+    meta = {
+        "profession": profession,
+        "is_fresher": is_fresher,
+        "completeness": comp,
+        "weights_used": {k: round(v, 1) for k, v in weights.items()}
+    }
+
+    return final_score, analysis, breakdown, meta
 
 def generate_hireability_summary_fallback(score: float, analysis: dict, breakdown: dict) -> str:
     """Generate a pseudo-LLM hireability summary based on the parsed data."""
@@ -789,7 +967,7 @@ def extract_github_stats(username: str) -> dict:
 
 import hashlib
 
-async def process_resume_task(file_content: bytes, filename: str, jd_text: str = "", company_values: str = "", user_id: str = "anonymous"):
+async def process_resume_task(file_content: bytes, filename: str, jd_text: str = "", company_values: str = "", user_id: str = "anonymous", custom_weights: dict = None):
     # Cache versioning to force refresh on code logic updates
     # Bumping to v2.2 to hard-reset all users
     CACHE_VERSION = "v2.5_FORCE_JD_PROS_CONS"
@@ -819,10 +997,12 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
         if filename.lower().endswith(".pdf"):
             import io
 
-            # --- PHASE 1: Combined PDF Extraction (Single-pass fitz + pdfplumber) ---
+            # --- PHASE 1: Dict-Level PDF Extraction (font color + size metadata) ---
             structural_text = ""
             plumber_text = ""
             hyperlinks = []
+            fraud_flags = []
+            is_dark_mode = False
             try:
                 try:
                     pdf_doc = fitz.open(stream=file_content, filetype="pdf")
@@ -837,18 +1017,61 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
                     await handle_locked_pdf(filename, user_id, file_hash)
                     return
 
-                # Single-pass: extract text + blocks in one loop
-                text_parts = []
-                block_parts = []
+                # TWO-PASS STATISTICAL EXTRACTION (from SAH v1 architecture)
+                # Pass 1: Contextual color distribution — detect dark-mode resumes
+                white_char_count = 0
+                total_char_count = 0
                 for page in pdf_doc:
-                    text_parts.append(page.get_text("text"))
-                    for block in sorted(page.get_text("blocks"), key=lambda b: (b[1], b[0])):
-                        if block[6] == 0:
-                            block_parts.append(block[4])
-                text_mode = "\n".join(text_parts)
-                block_mode = "\n".join(block_parts)
+                    page_data = page.get_text("dict", sort=True)
+                    for block in page_data.get("blocks", []):
+                        if block.get("type") != 0:
+                            continue
+                        for line in block.get("lines", []):
+                            for span in line.get("spans", []):
+                                chars = len(span.get("text", "").strip())
+                                total_char_count += chars
+                                if span.get("color") == 16777215:  # 0xFFFFFF = pure white
+                                    white_char_count += chars
+
+                if total_char_count > 0 and (white_char_count / total_char_count) > 0.15:
+                    is_dark_mode = True
+                    await manager.broadcast("> Dark-mode resume detected. Adjusting forensic engine.")
+
+                # Pass 2: Actual extraction with font-level fraud filtering
+                clean_parts = []
+                raw_parts = []  # All text including hidden (for cross-reference)
+                for page in pdf_doc:
+                    page_data = page.get_text("dict", sort=True)
+                    for block in page_data.get("blocks", []):
+                        if block.get("type") != 0:
+                            continue
+                        for line in block.get("lines", []):
+                            for span in line.get("spans", []):
+                                span_text = span.get("text", "")
+                                raw_parts.append(span_text)
+
+                                # Filter 1: White text on non-dark-mode docs = hidden keyword stuffing
+                                if span.get("color") == 16777215 and not is_dark_mode:
+                                    if "invisible_text" not in fraud_flags:
+                                        fraud_flags.append("invisible_text")
+                                    continue  # Skip hidden text
+
+                                # Filter 2: Microscopic text (<4pt is unreadable to humans)
+                                if span.get("size", 10) < 4.0:
+                                    if "microscopic_text" not in fraud_flags:
+                                        fraud_flags.append("microscopic_text")
+                                    continue  # Skip micro text
+
+                                clean_parts.append(span_text)
+
+                structural_text = " ".join(clean_parts)
+                raw_structural_text = " ".join(raw_parts)
+
+                if fraud_flags:
+                    flag_str = ", ".join(fraud_flags)
+                    await manager.broadcast(f"> FORENSIC_ALERT: Font-level fraud detected [{flag_str}]! Hidden text filtered.")
+
                 pdf_doc.close()
-                structural_text = text_mode if len(text_mode) >= len(block_mode) else block_mode
             except Exception:
                 pass
             
@@ -902,26 +1125,29 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
                     await manager.broadcast(f"> OCR note: {str(e)}.")
 
             # --- PHASE 3: Text Selection & Forensic Hidden Signal Detection ---
-            raw_all_text = plumber_text or structural_text
+            raw_all_text = plumber_text or (raw_structural_text if 'raw_structural_text' in dir() else structural_text)
             if ocr_success:
                 full_text = ocr_text
             else:
                 candidates_text = [(structural_text, "structural"), (plumber_text, "plumber")]
                 best_text, best_source = max(candidates_text, key=lambda x: len(x[0].strip()))
                 full_text = best_text
-            
+
             # Append hyperlinks
             if hyperlinks:
                 full_text += "\n" + "\n".join(set(hyperlinks))
             
             # Forensic cross-reference: detect hidden keyword stuffing
-            hidden_signal_detected = False
-            if raw_all_text and full_text:
+            hidden_signal_detected = bool(fraud_flags) if 'fraud_flags' in dir() else False
+            if not hidden_signal_detected and raw_all_text and full_text:
                 visible_len = len(full_text.strip())
                 raw_len = len(raw_all_text.strip())
                 if raw_len > visible_len + 300 and raw_len > visible_len * 1.5:
-                    hidden_signal_detected = True
-                    await manager.broadcast(f"> FORENSIC_ALERT: {raw_len - visible_len} hidden characters detected!")
+                    if is_dark_mode:
+                        full_text = raw_all_text  # Trust raw text for dark mode
+                    else:
+                        hidden_signal_detected = True
+                        await manager.broadcast(f"> FORENSIC_ALERT: {raw_len - visible_len} hidden characters detected!")
             
             # Clean up doubled characters from OCR artifacts (e.g. "Wwoorrkk" -> "Work")
             import re as _re
@@ -941,6 +1167,30 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             
             with open("DEBUG_LAST_RESUME.txt", "w", encoding="utf-8") as f:
                  f.write(full_text)
+        elif filename.lower().endswith(".doc"):
+            import os, tempfile
+            temp_path = os.path.join(tempfile.gettempdir(), f"temp_{os.urandom(4).hex()}_{filename}")
+            with open(temp_path, "wb") as f:
+                f.write(file_content)
+            try:
+                import win32com.client
+                import pythoncom
+                pythoncom.CoInitialize()  # Required for background threads using COM
+                word = win32com.client.Dispatch("Word.Application")
+                word.Visible = False
+                doc = word.Documents.Open(os.path.abspath(temp_path))
+                full_text = doc.Content.Text
+                doc.Close()
+                word.Quit()
+            except Exception as e:
+                await manager.broadcast(f"> ERROR parsing .doc: {e}")
+                # String regex fallback for legacy formats
+                full_text = file_content.decode("utf-8", errors="ignore")
+            finally:
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except: pass
         elif filename.lower().endswith(".docx"):
             import io
             import docx
@@ -965,6 +1215,37 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
     # --- PHASE 5: Security & Contextual Analysis (Parallel) ---
     # regex pre-check (instant)
     is_malicious = False
+    is_duplicate = False
+    
+    # Duplicate/Plagiarism Detection
+    import math
+    from collections import Counter
+    
+    def get_cosine_sim(vec1, vec2):
+        intersection = set(vec1.keys()) & set(vec2.keys())
+        numerator = sum([vec1[x] * vec2[x] for x in intersection])
+        sum1 = sum([vec1[x] ** 2 for x in list(vec1.keys())])
+        sum2 = sum([vec2[x] ** 2 for x in list(vec2.keys())])
+        denominator = math.sqrt(sum1) * math.sqrt(sum2)
+        if not denominator: return 0.0
+        return float(numerator) / denominator
+
+    words_current = re.findall(r'\w+', full_text.lower())
+    if words_current:
+        vec_current = Counter(words_current)
+        for prev_hash, prev_text in RESUME_HISTORY.items():
+            if prev_hash == file_hash: continue
+            vec_prev = Counter(re.findall(r'\w+', prev_text.lower()))
+            sim = get_cosine_sim(vec_current, vec_prev)
+            if sim > 0.90:
+                is_malicious = True
+                is_duplicate = True
+                await manager.broadcast(f"> 🚨 DUPLICATE_ALERT: >90% match with previous upload (hash: {prev_hash[:8]})")
+                break
+                
+    # Save to history for future comparisons
+    RESUME_HISTORY[file_hash] = full_text
+
     if "ignore all previous" in full_text.lower() or "ignore the job description" in full_text.lower():
         is_malicious = True
         await manager.broadcast("> 🚨 SECURITY_ALERT: Prompt Injection signature detected!")
@@ -996,9 +1277,14 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
     github_verified = False
     personal_info = {"name": "Candidate", "email": "N/A", "phone": "N/A", "location": "N/A"}
     upsell_recommendations = []
+    extracted = {}
+    meta = {}
 
     if is_malicious:
-        await manager.broadcast("> 🚨 MALICIOUS: AI Manipulation Attempt!")
+        if is_duplicate:
+            await manager.broadcast("> 🚨 MALICIOUS: Exact Duplicate/Plagiarized Resume Detected!")
+        else:
+            await manager.broadcast("> 🚨 MALICIOUS: AI Manipulation Attempt!")
         extracted = {
             "name": "MALICIOUS PROFILE rejected",
             "email": "Blocked", "phone": "Blocked", "location": "Blocked",
@@ -1006,13 +1292,14 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             "project_count": 0, "experience_count": 0, "internship_count": 0, "cgpa": 0
         }
         personal_info = {"name": "MALICIOUS PROFILE", "email": "Blocked", "phone": "Blocked", "location": "Blocked"}
-        hireability_summary = "This candidate attempted to manipulate the AI scoring system via prompt injection. Profile automatically rejected."
-        trust_data = {"score": 0, "reasoning": "Malicious signature detected in resume payload."}
+        reason_str = "Duplicate/plagiarized content detected." if is_duplicate else "Malicious signature detected in resume payload."
+        hireability_summary = reason_str
+        trust_data = {"score": 0, "reasoning": reason_str}
     else:
         try:
             # 1. Structural Parse + Scoring (Sync - fast)
             extracted = extract_structured_data(full_text)
-            score, analysis, score_breakdown = calculate_candidate_score(extracted, full_text, jd_text)
+            score, analysis, score_breakdown, meta = calculate_candidate_score(extracted, full_text, jd_text, custom_weights)
             
             # 2. Fire ALL AI + network tasks in absolute parallel
             await manager.broadcast("> Running Parallel Neural Analysis...")
@@ -1079,7 +1366,14 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             
         except Exception as analysis_e:
             await manager.broadcast(f"> ERROR: Analysis failure: {str(analysis_e)}")
-            extracted = extract_structured_data(full_text)
+            if not extracted:
+                extracted = {"name": filename, "skills": [], "experience_count": 0}
+            # Remove the second failing call if it's identical
+            # extracted = extract_structured_data(full_text) 
+            score = 0
+            analysis = {"matches": [], "missing": [], "jd_present": bool(jd_text.strip())}
+            score_breakdown = {}
+            meta = {"profession": "General", "is_fresher": True, "completeness": 0}
 
     # Consolidated final log
     await manager.broadcast(f"> ANALYZED: {extracted.get('name', 'Candidate')} | Score: {score} | Skills: {len(extracted.get('skills', []))} | Trust: {trust_data.get('score', 0)}")
@@ -1118,7 +1412,12 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             "github_username": github_user,
             "github_verified": github_verified,
             "file_hash": file_hash,
-            "is_locked": False
+            "is_locked": False,
+            "structured_data": extracted.get('structured_data', {}),
+            "profession": meta.get('profession', 'General'),
+            "is_fresher": meta.get('is_fresher', False),
+            "completeness": meta.get('completeness', 0),
+            "skill_domains": extracted.get('structured_data', {}).get('skill_domains', {})
         }
         
         # Save to Database — single atomic write
@@ -1466,6 +1765,26 @@ TIER_2_COLLEGES = [
     "daiict", "lnmiit", "vjti", "coep", "college of engineering pune", "kiit ", "jadavpur", "anna university"
 ]
 
+# Tier-1 companies (FAANG+, top tech, big consulting)
+TIER_1_COMPANIES = [
+    "google", "meta", "facebook", "amazon", "apple", "microsoft", "netflix",
+    "openai", "deepmind", "anthropic", "nvidia", "tesla", "spacex",
+    "goldman sachs", "morgan stanley", "jpmorgan", "jp morgan", "mckinsey",
+    "boston consulting", "bcg", "bain", "deloitte", "pwc", "ey ", "kpmg",
+    "uber", "airbnb", "stripe", "palantir", "salesforce", "adobe",
+    "twitter", "linkedin", "oracle", "ibm", "intel", "qualcomm", "samsung",
+    "tcs", "infosys", "wipro", "cognizant", "accenture", "capgemini",
+    "flipkart", "swiggy", "zomato", "razorpay", "cred", "phonepe",
+    "atlassian", "spotify", "databricks", "snowflake", "cloudflare",
+    "coinbase", "shopify", "twilio", "datadog", "elastic"
+]
+TIER_2_COMPANIES = [
+    "paytm", "ola", "byju", "meesho", "dream11", "unacademy",
+    "freshworks", "zoho", "hcl", "tech mahindra", "mindtree", "mphasis",
+    "vmware", "dell", "hp ", "hewlett", "cisco", "sap",
+    "paypal", "ebay", "booking.com", "trivago", "expedia"
+]
+
 async def verify_github(username: str) -> bool:
     """Checks if a GitHub username exists via public API."""
     if not username: return False
@@ -1699,18 +2018,44 @@ def extract_structured_data(text):
     text_lower = text.lower()
 
     # ── 1. Skills & Certifications ──────────────────────────────────────────
-    # Use word-boundary matching for short skills to avoid false positives
-    found_skills = []
+    from rapidfuzz import fuzz, utils
+    
+    expert_skills = []
+    partial_skills = []
+    
     for skill in SKILLS_TAXONOMY:
-        if len(skill) <= 3:
-            # Short skills like "c", "r", "go" need word boundaries
-            if re.search(r'\b' + re.escape(skill) + r'\b', text_lower):
-                found_skills.append(skill)
+        skill_lower = skill.lower()
+        matched = False
+        
+        # Exact match or regex for short skills
+        if len(skill_lower) <= 3:
+            if re.search(r'\b' + re.escape(skill_lower) + r'\b', text_lower):
+                matched = True
         else:
-            # Longer skills are safe with substring matching
-            if skill in text_lower:
-                found_skills.append(skill)
-    found_skills = list(set(found_skills))
+            # Substring exact check first for speed
+            if skill_lower in text_lower:
+                matched = True
+            # Fuzzy match to catch OCR typos (e.g. "Javascrlpt")
+            elif fuzz.partial_ratio(skill_lower, text_lower, processor=utils.default_process) >= 90:
+                matched = True
+                
+        if matched:
+            # Determine partial vs expert credit based on context words
+            context_match = re.search(r'(.{0,40})\b' + re.escape(skill_lower) + r'\b(.{0,40})', text_lower)
+            is_partial = False
+            if context_match:
+                context = context_match.group(1) + " " + context_match.group(2)
+                if any(w in context for w in ["familiar", "basic", "learning", "novice", "exposure", "beginner", "prior", "some"]):
+                    is_partial = True
+            
+            if is_partial:
+                partial_skills.append(skill)
+            else:
+                expert_skills.append(skill)
+                
+    expert_skills = list(set(expert_skills))
+    partial_skills = list(set(partial_skills))
+    found_skills = expert_skills + partial_skills  # Combined for old structured data backward compatibility
 
     # To be supplemented by LLM in the parallel phase
     llm_skills = []
@@ -1731,6 +2076,16 @@ def extract_structured_data(text):
     if has_intern_section and internship_count == 0:
         internship_count = 1
     internship_count = min(internship_count, 10)  # sanity cap
+
+    # Extract actual internship details (company + role lines near "intern" keyword)
+    internship_details = []
+    for i, line in enumerate(text.replace('\r\n', '\n').replace('\r', '\n').split('\n')):
+        stripped = line.strip()
+        if re.search(r'\bintern(?:ship)?\b', stripped, re.IGNORECASE) and len(stripped) > 10:
+            # Clean and add if it looks like a real detail line (not a section header)
+            if not re.match(r'^\s*internship[s]?\s*[:\-–]?\s*$', stripped, re.IGNORECASE):
+                internship_details.append(stripped[:120])
+    internship_details = internship_details[:5]  # cap at 5
 
     # ── 3. Projects ──────────────────────────────────────────────────────────
     # Line-by-line project section parser — works regardless of whitespace/encoding
@@ -1775,6 +2130,7 @@ def extract_structured_data(text):
         # Count lines that look like project TITLES (usually has | or : or just a short capitalized line)
         # and ignore lines that are clearly descriptions (starting with bullets)
         entries = []
+        project_titles = []  # Store actual titles for structured data
         for l in section_lines:
             # If it's a bullet point or starts with "•", it's a description, skip
             if re.match(r'^[-\u2022\u2013\u25ba\u25b8\*]|^\d+[\s\.\)]|^•', l):
@@ -1782,6 +2138,11 @@ def extract_structured_data(text):
             # If it looks like a title (contains separator or is relatively short and capitalized or camelCased)
             if '|' in l or ':' in l or (len(l) < 80 and (any(char.isupper() for char in l) or l.istitle())):
                 entries.append(l)
+                # Clean title: remove dates and separators for display
+                clean_title = re.sub(r'\|.*$', '', l).strip()
+                clean_title = re.sub(r'\s*[\(\[].*?[\)\]]\s*$', '', clean_title).strip()
+                if clean_title and len(clean_title) > 3:
+                    project_titles.append(clean_title[:100])
         
         project_count = len(entries)
         if project_count == 0 and section_lines:
@@ -1808,6 +2169,7 @@ def extract_structured_data(text):
             if git_links > project_count:
                 project_count = git_links
     else:
+        project_titles = []  # No section found
         # No section found: Fallback to action verbs only
         action_verbs = re.findall(
             r'\b(?:developed|built|created|designed|implemented|engineered|deployed|architected|automated|integrated|utilized|orchestrated|optimized|authored)\b',
@@ -2012,8 +2374,155 @@ def extract_structured_data(text):
     found_languages = [lang for lang in LANGUAGE_KEYWORDS if lang in text_lower]
     language_count = len(found_languages) if found_languages else 0
 
+    # ── 13. Certifications ────────────────────────────────────────────────────
+    cert_keywords = [
+        'aws certified', 'google certified', 'azure certified', 'pmp', 'ccna', 'ccnp',
+        'comptia', 'gcp certified', 'cissp', 'ceh', 'oscp', 'cka', 'ckad',
+        'scrum master', 'csm', 'itil', 'prince2', 'six sigma', 'togaf',
+        'tensorflow developer', 'data science cert', 'ibm certified',
+        'oracle certified', 'microsoft certified', 'meta certified', 'hubspot',
+        'salesforce certified', 'red hat certified', 'cisco certified'
+    ]
+    found_certs = []
+    for cert in cert_keywords:
+        if cert in text_lower:
+            found_certs.append(cert.title())
+    # Also try to extract certs from a dedicated section
+    cert_section_match = re.search(
+        r'(?:^|\n)\s*(?:certif(?:ication)?s?|licenses?)\s*[:\-–]?\s*\n(.*?)(?:\n\s*[A-Z][A-Z ]{3,}\s*\n|$)',
+        text, re.IGNORECASE | re.DOTALL
+    )
+    if cert_section_match:
+        cert_lines = [l.strip() for l in cert_section_match.group(1).split('\n') if l.strip() and len(l.strip()) > 5]
+        for cl in cert_lines[:8]:
+            clean = re.sub(r'^[\-\•\*\u2022\u2013]\s*', '', cl).strip()
+            if clean and clean not in found_certs:
+                found_certs.append(clean[:100])
+    found_certs = found_certs[:10]  # cap
+
+    # ── 14. Awards / Honors ──────────────────────────────────────────────────
+    awards_list = []
+    awards_section_match = re.search(
+        r'(?:^|\n)\s*(?:awards?|honours?|honors?|recognition)\s*[:\-–]?\s*\n(.*?)(?:\n\s*[A-Z][A-Z ]{3,}\s*\n|$)',
+        text, re.IGNORECASE | re.DOTALL
+    )
+    if awards_section_match:
+        award_lines = [l.strip() for l in awards_section_match.group(1).split('\n') if l.strip() and len(l.strip()) > 5]
+        for al in award_lines[:8]:
+            clean = re.sub(r'^[\-\•\*\u2022\u2013]\s*', '', al).strip()
+            if clean:
+                awards_list.append(clean[:120])
+    awards_list = awards_list[:8]
+
+    # ── 15. Publications ─────────────────────────────────────────────────────
+    publications_list = []
+    pub_section_match = re.search(
+        r'(?:^|\n)\s*(?:publications?|papers?|research\s*papers?)\s*[:\-–]?\s*\n(.*?)(?:\n\s*[A-Z][A-Z ]{3,}\s*\n|$)',
+        text, re.IGNORECASE | re.DOTALL
+    )
+    if pub_section_match:
+        pub_lines = [l.strip() for l in pub_section_match.group(1).split('\n') if l.strip() and len(l.strip()) > 10]
+        for pl in pub_lines[:5]:
+            clean = re.sub(r'^[\-\•\*\u2022\u2013\d\.\)]\s*', '', pl).strip()
+            if clean:
+                publications_list.append(clean[:150])
+    publications_list = publications_list[:5]
+
+    # ── 16. Hobbies & Interests ──────────────────────────────────────────────
+    hobbies_list = []
+    hobbies_section_match = re.search(
+        r'(?:^|\n)\s*(?:hobbies?|interests?|personal\s*interests?|specialized\s*interests?)\s*[:\-–]?\s*\n(.*?)(?:\n\s*[A-Z][A-Z ]{3,}\s*\n|$)',
+        text, re.IGNORECASE | re.DOTALL
+    )
+    if hobbies_section_match:
+        hobby_lines = [l.strip() for l in hobbies_section_match.group(1).split('\n') if l.strip() and len(l.strip()) > 2]
+        for hl in hobby_lines[:5]:
+            clean = re.sub(r'^[\-\•\*\u2022\u2013]\s*', '', hl).strip()
+            # Split comma-separated items
+            if ',' in clean:
+                for item in clean.split(','):
+                    item = item.strip()
+                    if item and len(item) > 2:
+                        hobbies_list.append(item[:60])
+            elif clean:
+                hobbies_list.append(clean[:60])
+    hobbies_list = hobbies_list[:10]
+
+    # ── 17. Education Details ────────────────────────────────────────────────
+    education_details = []
+    edu_section_match = re.search(
+        r'(?:^|\n)\s*(?:education|academic|qualifications?)\s*[:\-–]?\s*\n(.*?)(?:\n\s*[A-Z][A-Z ]{3,}\s*\n|$)',
+        text, re.IGNORECASE | re.DOTALL
+    )
+    if edu_section_match:
+        edu_lines = [l.strip() for l in edu_section_match.group(1).split('\n') if l.strip() and len(l.strip()) > 5]
+        for el in edu_lines[:6]:
+            clean = re.sub(r'^[\-\•\*\u2022\u2013]\s*', '', el).strip()
+            if clean:
+                education_details.append(clean[:150])
+    education_details = education_details[:4]
+
+    # ── 18. Degree name extraction ───────────────────────────────────────────
+    degree_name = 'Not detected'
+    degree_patterns = [
+        (r'\b(Ph\.?D\.?|Doctor(?:ate)?\s+(?:of|in)\s+\w+)', 'PhD'),
+        (r'\b(M\.?Tech|M\.?E\.?|Master\s+of\s+Technology|Master\s+of\s+Engineering)', 'M.Tech'),
+        (r'\b(M\.?S\.?|M\.?Sc\.?|Master\s+of\s+Science)', 'M.Sc'),
+        (r'\b(MBA|Master\s+of\s+Business)', 'MBA'),
+        (r'\b(MCA|Master\s+of\s+Computer\s+App)', 'MCA'),
+        (r'\b(B\.?Tech|B\.?E\.?|Bachelor\s+of\s+Technology|Bachelor\s+of\s+Engineering)', 'B.Tech'),
+        (r'\b(B\.?S\.?|B\.?Sc\.?|Bachelor\s+of\s+Science)', 'B.Sc'),
+        (r'\b(BCA|Bachelor\s+of\s+Computer\s+App)', 'BCA'),
+        (r'\b(BBA|Bachelor\s+of\s+Business)', 'BBA'),
+        (r'\b(Diploma)', 'Diploma'),
+    ]
+    for pat, name in degree_patterns:
+        if re.search(pat, text, re.IGNORECASE):
+            degree_name = name
+            break
+
+    # ── Build structured_data for frontend display ───────────────────────────
+    structured_data = {
+        "education": {
+            "degree": degree_name,
+            "college": college_name,
+            "cgpa": cgpa,
+            "school_marks": school_marks,
+            "details": education_details
+        },
+        "internships": {
+            "count": internship_count,
+            "details": internship_details
+        },
+        "projects": {
+            "count": project_count,
+            "titles": project_titles
+        },
+        "certifications": found_certs,
+        "awards": awards_list,
+        "publications": publications_list,
+        "hobbies": hobbies_list,
+        "languages": found_languages if found_languages else [],
+        "skills_list": found_skills,
+        "experience": {
+            "years": experience_years,
+            "count": experience_count
+        },
+        "extracurricular_count": extra_count,
+        "hackathon_count": hack_count,
+        "online_links": {
+            "github": bool('github' in text_lower),
+            "linkedin": bool('linkedin' in text_lower),
+            "portfolio": bool(re.search(r'(?:portfolio|website|personal site)', text_lower))
+        },
+        "github_username": github_username,
+        "skill_domains": categorize_skills_by_domain(found_skills)
+    }
+
     return {
-        "skills":             found_skills,
+        "skills":             expert_skills,  # 1.0x points
+        "partial_skills":     partial_skills, # 0.5x points
+        "all_skills":         found_skills,   # Combined skills list for rendering
         "internship_count":   internship_count,
         "project_count":      project_count,
         "cgpa":               cgpa,
@@ -2030,7 +2539,8 @@ def extract_structured_data(text):
         "school_marks_score": school_marks_score,
         "llm_skills":         llm_skills,   # Dynamic skills found by AI
         "github_username":    github_username,
-        "raw_text_snippet":   text[:500] + "..."
+        "raw_text_snippet":   text[:500] + "...",
+        "structured_data":    structured_data  # Full structured extraction for frontend display
     }
 
 @app.post("/upload")
@@ -2040,15 +2550,24 @@ async def process_resume(
     jd_text: Optional[str] = Form(None),
     company_values: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None),
+    custom_weights: Optional[str] = Form(None),
     x_user_id: str = Header(default="anonymous")
 ):
     # Prefer user_id from Form, fallback to Header
     effective_user_id = user_id or x_user_id
     
+    parsed_weights = None
+    if custom_weights:
+        import json
+        try:
+            parsed_weights = json.loads(custom_weights)
+        except Exception:
+            pass
+
     # Read file content to pass to background task (file object closes after request)
     file_content = await file.read()
     
-    background_tasks.add_task(process_resume_task, file_content, file.filename, jd_text or "", company_values or "", effective_user_id)
+    background_tasks.add_task(process_resume_task, file_content, file.filename, jd_text or "", company_values or "", effective_user_id, parsed_weights)
     
     return {"message": "Processing started", "filename": file.filename}
 
@@ -2100,58 +2619,64 @@ async def compare_candidates(req: CompareRequest):
     profiles = []
     for filename, data_json in rows:
         data = json.loads(data_json)
-        # Fetch raw_text from JSON if available, otherwise use empty string
         raw_text = data.get("raw_text", "")
-        # Cap raw_text per candidate to prevent excessive token usage while still providing deep context
+        # Move metadata to the top specifically for the LLM to see first
         profiles.append({
             "name": data.get("name", filename),
-            "score": data.get("score", 0),
-            "skills": data.get("skills", []),
-            "summary": data.get("hireability_summary", ""),
-            "full_context": raw_text[:12000], 
-            "experience_years": data.get("experience_years", 0),
-            "project_count": data.get("project_count", 0),
-            "cgpa": data.get("cgpa", 0.0),
-            "internships": data.get("internship_count", 0)
+            "METADATA": {
+                "cgpa": data.get("cgpa", 0.0),
+                "total_score": data.get("score", 0),
+                "experience_years": data.get("experience_years", 0),
+                "project_count": data.get("project_count", 0),
+                "internship_count": data.get("internship_count", 0),
+                "skills": data.get("skills", [])
+            },
+            "hireability_summary": data.get("hireability_summary", ""),
+            "full_resume_text_context": raw_text[:10000] # Slightly smaller context to ensure metadata isn't lost
         })
         
     if req.manual_candidates:
         for manual in req.manual_candidates:
             profiles.append({
                 "name": manual.get("name", "Manual Entry"),
-                "score": manual.get("score", 0),
-                "skills": manual.get("skills", []),
-                "summary": manual.get("summary", "Manually entered criteria data point."),
-                "full_context": "MANUAL_ENTRY_DATA_ONLY",
-                "experience_years": manual.get("experience_years", 0),
-                "project_count": manual.get("project_count", 0),
-                "cgpa": manual.get("cgpa", 0.0),
-                "internships": manual.get("internships", 0)
+                "METADATA": {
+                    "cgpa": manual.get("cgpa", 0.0),
+                    "total_score": manual.get("score", 0),
+                    "experience_years": manual.get("experience_years", 0),
+                    "project_count": manual.get("project_count", 0),
+                    "internship_count": manual.get("internships", 0),
+                    "skills": manual.get("skills", [])
+                },
+                "hireability_summary": "Manually entered criteria data point.",
+                "full_resume_text_context": "MANUAL_ENTRY_DATA_ONLY"
             })
 
-    # Limit to 5 candidates when using full context to stay within safe token limits for 8b-instant
     profiles = profiles[:5]
-        
     arbitration_focus = f"USER_SPECIFIC_QUESTION: {req.question}" if req.question else f"JD_REQUIREMENTS: {req.jd_text}"
     
     prompt = f"""
-    SYSTEM_ROLE: ELITE_TECHNICAL_ARBITRATOR
-    CONTEXT: Deep-dive comparison of {len(profiles)} candidates.
+    SYSTEM_ROLE: ELITE_DATA_ARBITRATOR
+    
+    TASK: Answer the PRIMARY_FOCUS question by comparing {len(profiles)} candidates.
     PRIMARY_FOCUS: {arbitration_focus}
     
     CANDIDATES_DATA:
     {json.dumps(profiles, indent=2)}
     
-    TASK: Perform a "Battle Royale" technical arbitration.
-    1. If a USER_SPECIFIC_QUESTION is provided, your entire analysis MUST revolve around answering that question using the `full_context` of the resumes.
-    2. Identify the 'Absolute Winner' who best satisfies the Focus/Question.
-    3. Identify the 'Runner Up'.
-    4. For EVERY candidate, provide a "Kill Factor" (a short, aggressive 1-sentence explanation of their specific edge or why they lost relative to the focus).
-    5. Provide an "Arbitration Summary" that details the specific nuances found in their `full_context` that led to this decision.
+    STRICT_ARBITRATION_RULES:
+    1. If a USER_SPECIFIC_QUESTION is provided (like "who has more cgpa"), you MUST answer it using the "METADATA" block first.
+    2. If the user asks for a numerical value (GPA, Score, Experience), EXPLICITLY state those numbers in your explanation.
+    3. DO NOT fallback to general technical skills (Agentic AI, Cloud, etc.) unless they are specifically mentioned in the USER_SPECIFIC_QUESTION.
+    4. If the requested data (e.g. CGPA) is 0 for all candidates, explicitly state: "No CGPA data was found across these resumes to make a comparison."
+    5. Be blunt and objective. Use ACTUAL numbers from the METADATA.
     
-    CRITICAL: Base your decision on ACTUAL evidence found in the `full_context`. If the user asks a specific question, look for hidden achievements or niche skills in the raw text.
+    OUTPUT_REQUIREMENTS:
+    - "winner": The name of the candidate who ranks #1 for the specific question.
+    - "runner_up": The runner up.
+    - "comparison_matrix": For each candidate, rank them and give a 1-sentence "kill_factor" explaining why they rank there for THIS SPECIFIC QUESTION.
+    - "arbitration_summary": A detailed Markdown comparison. Bold the numerical values. 
     
-    Output Format: PURE RAW JSON matches this:
+    Output Format (PURE RAW JSON ONLY):
     {{
         "winner": "Name",
         "runner_up": "Name",
@@ -2163,7 +2688,8 @@ async def compare_candidates(req: CompareRequest):
     """
     
     try:
-        content = await call_groq_with_retry(prompt, temperature=0.3, max_tokens=1000)
+        # Use a more powerful model for Battle Royale arbitration to ensure deep context analysis and 'wow' factor reasoning.
+        content = await call_groq_with_retry(prompt, model="llama-3.3-70b-versatile", temperature=0.3, max_tokens=1500)
         if not content: return {"error": "AI Arbitration timed out."}
         
         res = json.loads(content)
