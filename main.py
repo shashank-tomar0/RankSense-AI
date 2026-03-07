@@ -45,8 +45,8 @@ FREE_LIMIT = 99999 # Unlimited for now
 DB_NAME = "talentscout.db"
 
 # Global AI Concurrency Control
-# Groq 8b-instant free tier handles short bursts well. 4 concurrent workers + exponential backoff.
-ai_semaphore = asyncio.Semaphore(4)
+# Groq 8b-instant free tier handles short bursts well. 8 concurrent workers + exponential backoff.
+ai_semaphore = asyncio.Semaphore(8)
 
 async def call_groq_with_retry(prompt: str, system_prompt: str = "You output only valid JSON objects.", model: str = "llama-3.1-8b-instant", response_format: dict = {"type": "json_object"}, temperature: float = 0.3, max_tokens: int = 500, max_retries: int = 3):
     """Wait for semaphore, call Groq, and retry with backoff on 429."""
@@ -924,9 +924,8 @@ async def handle_locked_pdf(filename: str, user_id: str, file_hash: str):
         # Still broadcast so the frontend shows it in the current session
         await manager.broadcast(f"COMPLETE_JSON:{json.dumps(breakdown)}")
 
-@lru_cache(maxsize=100)
-def extract_github_stats(username: str) -> dict:
-    """Synchronously fetches GitHub user stats with token support and caching."""
+async def extract_github_stats(username: str) -> dict:
+    """Asynchronously fetches GitHub user stats with token support."""
     stats = {"repos": 0, "followers": 0, "verified": False, "last_active": "Unknown"}
     if not username:
         return stats
@@ -939,27 +938,35 @@ def extract_github_stats(username: str) -> dict:
     user_url = f"https://api.github.com/users/{username}"
     repos_url = f"https://api.github.com/users/{username}/repos?sort=updated&per_page=1"
     
-    try:
-        # User details
-        req = urllib.request.Request(user_url, headers=headers)
+    def fetch_url(url):
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            stats["repos"] = data.get("public_repos", 0)
-            stats["followers"] = data.get("followers", 0)
-            stats["verified"] = True
+            return json.loads(response.read().decode())
+    
+    try:
+        # Run blocking network calls in a thread
+        user_data, repo_data = await asyncio.gather(
+            asyncio.to_thread(fetch_url, user_url),
+            asyncio.to_thread(fetch_url, repos_url),
+            return_exceptions=True
+        )
         
-        # Latest activity
-        req_repos = urllib.request.Request(repos_url, headers=headers)
-        with urllib.request.urlopen(req_repos, timeout=5) as response:
-            repo_data = json.loads(response.read().decode())
+        if not isinstance(user_data, Exception):
+            stats["repos"] = user_data.get("public_repos", 0)
+            stats["followers"] = user_data.get("followers", 0)
+            stats["verified"] = True
+            
+        if not isinstance(repo_data, Exception):
             if repo_data and isinstance(repo_data, list):
                 stats["last_active"] = repo_data[0].get("updated_at", "Unknown")[:10]
-    except urllib.error.HTTPError as he:
-        if he.code == 403:
-            print(f"GitHub Rate Limit Hit for {username}. Use GITHUB_TOKEN to increase limits.")
-            stats["last_active"] = "Rate Limited"
         else:
-            print(f"GitHub HTTP Error {he.code} for {username}")
+            if hasattr(user_data, 'code') and getattr(user_data, 'code') == 403:
+                print(f"GitHub Rate Limit Hit for {username}. Use GITHUB_TOKEN to increase limits.")
+                stats["last_active"] = "Rate Limited"
+            elif hasattr(repo_data, 'code') and getattr(repo_data, 'code') == 403:
+               print(f"GitHub Rate Limit Hit for {username} on repos API.")
+               stats["last_active"] = "Rate Limited"
+
     except Exception as e:
         print(f"GitHub API Error for {username}: {e}")
         pass 
@@ -1003,126 +1010,149 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             hyperlinks = []
             fraud_flags = []
             is_dark_mode = False
-            try:
-                try:
-                    pdf_doc = fitz.open(stream=file_content, filetype="pdf")
-                except Exception as doc_e:
-                    if "encrypted" in str(doc_e).lower() or "password" in str(doc_e).lower():
-                        await handle_locked_pdf(filename, user_id, file_hash)
-                        return
-                    raise
-
+            # Helper functions for thread execution
+            def parse_fitz(file_bytes):
+                res = {
+                    "structural_text": "",
+                    "raw_structural_text": "",
+                    "is_dark_mode": False,
+                    "fraud_flags": []
+                }
+                pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
                 if pdf_doc.needs_pass:
                     pdf_doc.close()
-                    await handle_locked_pdf(filename, user_id, file_hash)
-                    return
+                    return {"error": "password"}
 
-                # TWO-PASS STATISTICAL EXTRACTION (from SAH v1 architecture)
-                # Pass 1: Contextual color distribution — detect dark-mode resumes
                 white_char_count = 0
                 total_char_count = 0
                 for page in pdf_doc:
                     page_data = page.get_text("dict", sort=True)
                     for block in page_data.get("blocks", []):
-                        if block.get("type") != 0:
-                            continue
+                        if block.get("type") != 0: continue
                         for line in block.get("lines", []):
                             for span in line.get("spans", []):
                                 chars = len(span.get("text", "").strip())
                                 total_char_count += chars
-                                if span.get("color") == 16777215:  # 0xFFFFFF = pure white
+                                if span.get("color") == 16777215:
                                     white_char_count += chars
 
                 if total_char_count > 0 and (white_char_count / total_char_count) > 0.15:
-                    is_dark_mode = True
-                    await manager.broadcast("> Dark-mode resume detected. Adjusting forensic engine.")
+                    res["is_dark_mode"] = True
 
-                # Pass 2: Actual extraction with font-level fraud filtering
                 clean_parts = []
-                raw_parts = []  # All text including hidden (for cross-reference)
+                raw_parts = []
                 for page in pdf_doc:
                     page_data = page.get_text("dict", sort=True)
                     for block in page_data.get("blocks", []):
-                        if block.get("type") != 0:
-                            continue
+                        if block.get("type") != 0: continue
                         for line in block.get("lines", []):
                             for span in line.get("spans", []):
                                 span_text = span.get("text", "")
                                 raw_parts.append(span_text)
 
-                                # Filter 1: White text on non-dark-mode docs = hidden keyword stuffing
-                                if span.get("color") == 16777215 and not is_dark_mode:
-                                    if "invisible_text" not in fraud_flags:
-                                        fraud_flags.append("invisible_text")
-                                    continue  # Skip hidden text
+                                if span.get("color") == 16777215 and not res["is_dark_mode"]:
+                                    if "invisible_text" not in res["fraud_flags"]:
+                                        res["fraud_flags"].append("invisible_text")
+                                    continue
 
-                                # Filter 2: Microscopic text (<4pt is unreadable to humans)
                                 if span.get("size", 10) < 4.0:
-                                    if "microscopic_text" not in fraud_flags:
-                                        fraud_flags.append("microscopic_text")
-                                    continue  # Skip micro text
+                                    if "microscopic_text" not in res["fraud_flags"]:
+                                        res["fraud_flags"].append("microscopic_text")
+                                    continue
 
                                 clean_parts.append(span_text)
 
-                structural_text = " ".join(clean_parts)
-                raw_structural_text = " ".join(raw_parts)
-
-                if fraud_flags:
-                    flag_str = ", ".join(fraud_flags)
-                    await manager.broadcast(f"> FORENSIC_ALERT: Font-level fraud detected [{flag_str}]! Hidden text filtered.")
-
+                res["structural_text"] = " ".join(clean_parts)
+                res["raw_structural_text"] = " ".join(raw_parts)
                 pdf_doc.close()
-            except Exception:
-                pass
-            
-            # Single pdfplumber pass: extract text + hyperlinks together
-            try:
-                with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                return res
+
+            def parse_plumber(file_bytes):
+                res = {"plumber_text": "", "hyperlinks": []}
+                with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
                     plumber_parts = []
                     for page in pdf.pages:
                         plumber_parts.append(page.extract_text() or "")
                         if page.hyperlinks:
                             for hl in page.hyperlinks:
                                 if hl.get('uri'):
-                                    hyperlinks.append(hl['uri'])
-                    plumber_text = "\n".join(plumber_parts)
-            except Exception as e:
-                if "password" in str(e).lower():
+                                    res["hyperlinks"].append(hl['uri'])
+                    res["plumber_text"] = "\n".join(plumber_parts)
+                return res
+
+            try:
+                # Run PDF parsers in parallel threads
+                fitz_task = asyncio.to_thread(parse_fitz, file_content)
+                plumber_task = asyncio.to_thread(parse_plumber, file_content)
+                
+                f_res, p_res = await asyncio.gather(fitz_task, plumber_task)
+
+                if f_res.get("error") == "password":
                     await handle_locked_pdf(filename, user_id, file_hash)
                     return
+                
+                structural_text = f_res.get("structural_text", "")
+                raw_structural_text = f_res.get("raw_structural_text", "")
+                is_dark_mode = f_res.get("is_dark_mode", False)
+                fraud_flags = f_res.get("fraud_flags", [])
+                
+                plumber_text = p_res.get("plumber_text", "")
+                hyperlinks = p_res.get("hyperlinks", [])
+                
+                if is_dark_mode:
+                    await manager.broadcast("> Dark-mode resume detected. Adjusting forensic engine.")
+                if fraud_flags:
+                    flag_str = ", ".join(fraud_flags)
+                    await manager.broadcast(f"> FORENSIC_ALERT: Font-level fraud detected [{flag_str}]! Hidden text filtered.")
 
-            # --- PHASE 2: OCR Extraction (Fallback — only if digital text is sparse) ---
+            except Exception as e:
+                if "password" in str(e).lower() or "encrypted" in str(e).lower():
+                    await handle_locked_pdf(filename, user_id, file_hash)
+                    return
+                await manager.broadcast(f"> Parse Warning: {str(e)}")
+                # Provide fallbacks if both crash completely
+                structural_text = structural_text if 'structural_text' in locals() else ""
+                plumber_text = plumber_text if 'plumber_text' in locals() else ""
+                raw_structural_text = raw_structural_text if 'raw_structural_text' in locals() else ""
+
+            # --- PHASE 2: OCR Extraction (Threaded Fallback) ---
             ocr_text = ""
             ocr_success = False
             if len(structural_text.strip()) < 200 and len(plumber_text.strip()) < 200:
-                await manager.broadcast("> OCR fallback triggered...")
-                try:
-                    import pytesseract
-                    from PIL import Image
-                    tesseract_paths = [
-                        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-                        r'C:\Users\dell\AppData\Local\Tesseract-OCR\tesseract.exe',
-                        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
-                    ]
-                    for p in tesseract_paths:
-                        if os.path.exists(p):
-                            pytesseract.pytesseract.tesseract_cmd = p
-                            break
-                    
-                    pdf_doc = fitz.open(stream=file_content, filetype="pdf")
-                    ocr_parts = []
-                    for page_num in range(len(pdf_doc)):
-                        page = pdf_doc[page_num]
-                        mat = fitz.Matrix(200/72, 200/72)  # 200 DPI (was 300) — 2x faster
-                        pix = page.get_pixmap(matrix=mat)
-                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        ocr_parts.append(pytesseract.image_to_string(img))
-                    pdf_doc.close()
-                    ocr_text = "\n".join(ocr_parts)
-                    if len(ocr_text.strip()) > 50:
-                        ocr_success = True
-                except Exception as e:
-                    await manager.broadcast(f"> OCR note: {str(e)}.")
+                await manager.broadcast("> OCR fallback triggered (Running in Background)...")
+                def perform_ocr_threaded(content):
+                    try:
+                        import pytesseract
+                        from PIL import Image
+                        import fitz
+                        tesseract_paths = [
+                            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+                            r'C:\Users\dell\AppData\Local\Tesseract-OCR\tesseract.exe',
+                            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
+                        ]
+                        for p in tesseract_paths:
+                            if os.path.exists(p):
+                                pytesseract.pytesseract.tesseract_cmd = p
+                                break
+                        
+                        pdf_doc = fitz.open(stream=content, filetype="pdf")
+                        ocr_parts = []
+                        for page_num in range(len(pdf_doc)):
+                            page = pdf_doc[page_num]
+                            mat = fitz.Matrix(200/72, 200/72) 
+                            pix = page.get_pixmap(matrix=mat)
+                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                            ocr_parts.append(pytesseract.image_to_string(img))
+                        pdf_doc.close()
+                        return "\n".join(ocr_parts)
+                    except Exception as e:
+                        return f"ERROR: {str(e)}"
+
+                ocr_text = await asyncio.to_thread(perform_ocr_threaded, file_content)
+                if ocr_text and not ocr_text.startswith("ERROR:"):
+                    ocr_success = True
+                elif ocr_text.startswith("ERROR:"):
+                    await manager.broadcast(f"> OCR note: {ocr_text}.")
 
             # --- PHASE 3: Text Selection & Forensic Hidden Signal Detection ---
             raw_all_text = plumber_text or (raw_structural_text if 'raw_structural_text' in dir() else structural_text)
@@ -1217,31 +1247,46 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
     is_malicious = False
     is_duplicate = False
     
-    # Duplicate/Plagiarism Detection
-    import math
-    from collections import Counter
-    
-    def get_cosine_sim(vec1, vec2):
-        intersection = set(vec1.keys()) & set(vec2.keys())
-        numerator = sum([vec1[x] * vec2[x] for x in intersection])
-        sum1 = sum([vec1[x] ** 2 for x in list(vec1.keys())])
-        sum2 = sum([vec2[x] ** 2 for x in list(vec2.keys())])
-        denominator = math.sqrt(sum1) * math.sqrt(sum2)
-        if not denominator: return 0.0
-        return float(numerator) / denominator
+    # Duplicate/Plagiarism Detection (Threaded to prevent blocking)
+    def check_duplicates_threaded(text_to_check, history, current_hash):
+        import math
+        from collections import Counter
+        def get_cosine_sim(vec1, vec2):
+            intersection = set(vec1.keys()) & set(vec2.keys())
+            numerator = sum([vec1[x] * vec2[x] for x in intersection])
+            sum1 = sum([vec1[x] ** 2 for x in list(vec1.keys())])
+            sum2 = sum([vec2[x] ** 2 for x in list(vec2.keys())])
+            denominator = math.sqrt(sum1) * math.sqrt(sum2)
+            if not denominator: return 0.0
+            return float(numerator) / denominator
 
-    words_current = re.findall(r'\w+', full_text.lower())
-    if words_current:
+        words_current = re.findall(r'\w+', text_to_check.lower())
+        if not words_current: return None
         vec_current = Counter(words_current)
-        for prev_hash, prev_text in RESUME_HISTORY.items():
-            if prev_hash == file_hash: continue
-            vec_prev = Counter(re.findall(r'\w+', prev_text.lower()))
+        len_current = len(words_current)
+
+        for prev_hash, prev_text in history.items():
+            if prev_hash == current_hash: continue
+            
+            # Fast length-ratio heuristic: skip if word counts differ by >50%
+            words_prev = re.findall(r'\w+', prev_text.lower())
+            len_prev = len(words_prev)
+            if not len_prev: continue
+            ratio = min(len_current, len_prev) / max(len_current, len_prev)
+            if ratio < 0.5: continue
+
+            vec_prev = Counter(words_prev)
             sim = get_cosine_sim(vec_current, vec_prev)
             if sim > 0.90:
-                is_malicious = True
-                is_duplicate = True
-                await manager.broadcast(f"> 🚨 DUPLICATE_ALERT: >90% match with previous upload (hash: {prev_hash[:8]})")
-                break
+                return prev_hash
+        return None
+
+    await manager.broadcast("> Running neural plagiarism check...")
+    dup_hash = await asyncio.to_thread(check_duplicates_threaded, full_text, RESUME_HISTORY.copy(), file_hash)
+    if dup_hash:
+        is_malicious = True
+        is_duplicate = True
+        await manager.broadcast(f"> 🚨 DUPLICATE_ALERT: >90% match with previous upload (hash: {dup_hash[:8]})")
                 
     # Save to history for future comparisons
     RESUME_HISTORY[file_hash] = full_text
@@ -1304,17 +1349,17 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             # 2. Fire ALL AI + network tasks in absolute parallel
             await manager.broadcast("> Running Parallel Neural Analysis...")
             
-            async def get_personal_github_trust_chain():
+            async def get_personal_github_trust_chain(pre_extracted_github=None):
                 try:
                     p_info = await extract_personal_info_llm(raw_all_text if raw_all_text else full_text)
                 except Exception:
                     p_info = {}
                 
-                g_user = extracted.get('github_username') or p_info.get('github_username')
+                g_user = pre_extracted_github or extracted.get('github_username') or p_info.get('github_username')
                 g_stats = {"repos": 0, "followers": 0, "verified": False}
                 if g_user:
                     try:
-                        g_stats = await asyncio.to_thread(extract_github_stats, g_user)
+                        g_stats = await extract_github_stats(g_user)
                     except Exception:
                         pass
                 
@@ -1325,14 +1370,20 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
                     
                 return p_info, g_user, g_stats, t_data
 
+            # Early Regex Discovery for GitHub (start network calls 2s faster)
+            github_regex = r'github\.com/([\w%.-]+)'
+            gh_match = re.search(github_regex, full_text.lower())
+            early_gh = gh_match.group(1) if gh_match else None
+
             # LLM firewall + all AI tasks in one batch
             tasks = [
-                get_personal_github_trust_chain(),
+                get_personal_github_trust_chain(early_gh),
                 generate_hireability_summary_llm(score, analysis, score_breakdown, jd_text, bool(jd_text)),
                 generate_interview_questions_llm(analysis, extracted.get('skills', []), bool(jd_text)),
                 generate_soft_skills_llm(full_text, company_values),
                 generate_upsell_recommendations(analysis.get("missing", []), analysis.get("matches", []), company_values),
                 check_prompt_injection(full_text),  # Run firewall in parallel too
+                extract_career_details_llm(full_text),
             ]
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1346,6 +1397,8 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             interview_questions = results[2] if (not isinstance(results[2], Exception) and isinstance(results[2], list)) else interview_questions
             soft_skills_data = results[3] if not isinstance(results[3], Exception) else soft_skills_data
             upsell_recommendations = results[4] if not isinstance(results[4], Exception) else []
+            
+            career_details = results[6] if not isinstance(results[6], Exception) else {"internships": [], "projects": []}
             
             # Check if LLM firewall flagged it (parallel result)
             llm_malicious = results[5] if not isinstance(results[5], Exception) else False
@@ -1363,6 +1416,14 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
                 current_skills = extracted.get("skills", [])
                 new_skills = [s for s in personal_info["llm_skills"] if s.lower() not in [cs.lower() for cs in current_skills]]
                 extracted["skills"] = current_skills + new_skills
+            
+            if "structured_data" in extracted:
+                if career_details.get("internships"):
+                    extracted["structured_data"]["internships"]["details"] = career_details["internships"]
+                if career_details.get("projects"):
+                    extracted["structured_data"]["projects"]["titles"] = career_details["projects"]
+                if career_details.get("experience"):
+                    extracted["structured_data"]["experience"]["details"] = career_details["experience"]
             
         except Exception as analysis_e:
             await manager.broadcast(f"> ERROR: Analysis failure: {str(analysis_e)}")
@@ -1417,7 +1478,8 @@ async def process_resume_task(file_content: bytes, filename: str, jd_text: str =
             "profession": meta.get('profession', 'General'),
             "is_fresher": meta.get('is_fresher', False),
             "completeness": meta.get('completeness', 0),
-            "skill_domains": extracted.get('structured_data', {}).get('skill_domains', {})
+            "skill_domains": extracted.get('structured_data', {}).get('skill_domains', {}),
+            "is_duplicate": is_duplicate
         }
         
         # Save to Database — single atomic write
@@ -1559,7 +1621,10 @@ def clear_candidates(x_user_id: str = Header(default="anonymous")):
             count = c.rowcount
             conn.commit()
             print(f"DEBUG: Purged {count} candidates for user: {x_user_id}")
-            return JSONResponse(content={"message": f"Cleared {count} candidates", "count": count})
+            # Clear in-memory duplicate detection history
+            print(f"DEBUG: Clearing RESUME_HISTORY ({len(RESUME_HISTORY)} items)")
+            RESUME_HISTORY.clear()
+            return JSONResponse(content={"message": f"Cleared {count} candidates", "count": count, "history_cleared": True})
         finally:
             conn.close()
     except Exception as e:
@@ -1941,6 +2006,40 @@ Resume first 1500 chars:
         "location": location,
         "llm_skills": llm_skills
     }
+
+async def extract_career_details_llm(text: str) -> dict:
+    """Uses LLM to extract clean, readable details for internships and projects."""
+    if not groq_client: return {"internships": [], "projects": []}
+    try:
+        prompt = f"""Extract the career and project details from this resume.
+
+RULES:
+- Return ONLY a JSON object with this exact structure:
+  {{"internships": ["Role at Company (Date): 1-sentence description"], "projects": ["Project Name (Link if available): 1-sentence description"], "experience": ["Role at Company (Date): 1-sentence description"]}}
+- Be concise.
+- If there are no internships, projects, or experience, return empty arrays.
+- Limit to the top 5 most relevant entries for each.
+- CRITICAL: DO NOT list Hackathons, Competitions, or personal projects under "internships". Internships must be actual work experience at a company.
+
+Resume excerpt:
+{text[:4000]}"""
+        
+        content = await call_groq_with_retry(
+            prompt=prompt,
+            model="llama-3.1-8b-instant",
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_tokens=500
+        )
+        parsed = json.loads(content) if content else {}
+        return {
+            "internships": parsed.get("internships", []),
+            "projects": parsed.get("projects", []),
+            "experience": parsed.get("experience", [])
+        }
+    except Exception as e:
+        print(f"Error in career details LLM: {e}")
+        return {"internships": [], "projects": []}
 
 def extract_personal_info_fallback(text):
     """
@@ -2385,7 +2484,7 @@ def extract_structured_data(text):
     ]
     found_certs = []
     for cert in cert_keywords:
-        if cert in text_lower:
+        if re.search(rf'\b{re.escape(cert)}\b', text_lower):
             found_certs.append(cert.title())
     # Also try to extract certs from a dedicated section
     cert_section_match = re.search(
@@ -2466,11 +2565,12 @@ def extract_structured_data(text):
     degree_name = 'Not detected'
     degree_patterns = [
         (r'\b(Ph\.?D\.?|Doctor(?:ate)?\s+(?:of|in)\s+\w+)', 'PhD'),
+        # B.Tech should come first since it's far more common, and M.Tech regex can sometimes wrongly capture B.Tech if not bounded
+        (r'\b(B\.?Tech|B\.?E\.?|Bachelor\s+of\s+Technology|Bachelor\s+of\s+Engineering)', 'B.Tech'),
         (r'\b(M\.?Tech|M\.?E\.?|Master\s+of\s+Technology|Master\s+of\s+Engineering)', 'M.Tech'),
         (r'\b(M\.?S\.?|M\.?Sc\.?|Master\s+of\s+Science)', 'M.Sc'),
         (r'\b(MBA|Master\s+of\s+Business)', 'MBA'),
         (r'\b(MCA|Master\s+of\s+Computer\s+App)', 'MCA'),
-        (r'\b(B\.?Tech|B\.?E\.?|Bachelor\s+of\s+Technology|Bachelor\s+of\s+Engineering)', 'B.Tech'),
         (r'\b(B\.?S\.?|B\.?Sc\.?|Bachelor\s+of\s+Science)', 'B.Sc'),
         (r'\b(BCA|Bachelor\s+of\s+Computer\s+App)', 'BCA'),
         (r'\b(BBA|Bachelor\s+of\s+Business)', 'BBA'),

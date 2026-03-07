@@ -49,7 +49,7 @@ export interface Candidate {
     hobbies?: string[];
     languages?: string[];
     skills_list?: string[];
-    experience?: { years?: number; count?: number };
+    experience?: { years?: number; count?: number; details?: string[] };
     extracurricular_count?: number;
     hackathon_count?: number;
     online_links?: { github?: boolean; linkedin?: boolean; portfolio?: boolean };

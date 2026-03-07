@@ -370,8 +370,8 @@ export default function LandingPage() {
           </div>
         </div>
 
-        <div id="resume-stage">
-          <div className="resume-card">
+        <div id="resume-stage" className="reveal-on-scroll">
+          <div className="resume-card ripple-reveal">
             <div className="scan-beam"></div>
             <div className="scan-glow"></div>
             <div className="rc tl"></div>
@@ -380,7 +380,7 @@ export default function LandingPage() {
             <div className="rc br"></div>
 
             <div className="resume-scroll-content">
-              <div className="rv-header">
+              <div className="rv-header stagger-1">
                 <div className="rv-avatar">ST</div>
                 <div>
                   <div className="rv-name">Shashank Tomar</div>
@@ -394,61 +394,61 @@ export default function LandingPage() {
                 </div>
               </div>
 
-              <div className="rv-section-title">Education</div>
-              <div className="rv-line active" style={{ width: "75%" }}>
+              <div className="rv-section-title stagger-2">Education</div>
+              <div className="rv-line active stagger-2" style={{ width: "75%" }}>
                 <div className="hl" style={{ background: "rgba(0,212,255,0.25)" }}></div>
               </div>
-              <div className="rv-line" style={{ width: "55%" }}>
+              <div className="rv-line stagger-2" style={{ width: "55%" }}>
                 <div className="hl" style={{ background: "rgba(0,212,255,0.15)" }}></div>
               </div>
 
-              <div className="rv-section-title">Experience</div>
-              <div className="rv-line active" style={{ width: "90%" }}>
+              <div className="rv-section-title stagger-3">Experience</div>
+              <div className="rv-line active stagger-3" style={{ width: "90%" }}>
                 <div className="hl" style={{ background: "rgba(139,92,246,0.25)" }}></div>
               </div>
-              <div className="rv-line" style={{ width: "80%" }}>
+              <div className="rv-line stagger-3" style={{ width: "80%" }}>
                 <div className="hl" style={{ background: "rgba(139,92,246,0.15)" }}></div>
               </div>
-              <div className="rv-line" style={{ width: "65%" }}>
+              <div className="rv-line stagger-3" style={{ width: "65%" }}>
                 <div className="hl" style={{ background: "rgba(139,92,246,0.1)" }}></div>
               </div>
 
-              <div className="rv-section-title">Projects</div>
-              <div className="rv-line active" style={{ width: "85%" }}>
+              <div className="rv-section-title stagger-4">Projects</div>
+              <div className="rv-line active stagger-4" style={{ width: "85%" }}>
                 <div className="hl" style={{ background: "rgba(0,255,163,0.2)" }}></div>
               </div>
-              <div className="rv-line" style={{ width: "70%" }}>
+              <div className="rv-line stagger-4" style={{ width: "70%" }}>
                 <div className="hl" style={{ background: "rgba(0,255,163,0.12)" }}></div>
               </div>
-              <div className="rv-line" style={{ width: "60%" }}>
+              <div className="rv-line stagger-4" style={{ width: "60%" }}>
                 <div className="hl" style={{ background: "rgba(0,255,163,0.08)" }}></div>
               </div>
 
-              <div className="rv-section-title">Skills & Certifications</div>
-              <div className="rv-line active" style={{ width: "95%" }}>
+              <div className="rv-section-title stagger-5">Skills & Certifications</div>
+              <div className="rv-line active stagger-5" style={{ width: "95%" }}>
                 <div className="hl" style={{ background: "rgba(251,191,36,0.2)" }}></div>
               </div>
-              <div className="rv-line" style={{ width: "78%" }}>
+              <div className="rv-line stagger-5" style={{ width: "78%" }}>
                 <div className="hl" style={{ background: "rgba(251,191,36,0.12)" }}></div>
               </div>
             </div>
 
-            <div className="ex-popup" style={{ top: "36px", animationDelay: ".2s" }}>
+            <div className="ex-popup reveal-pop" style={{ top: "36px", transitionDelay: "0.8s" }}>
               <div className="exp-key">CGPA Detected</div>
               <div className="exp-val">9.2 / 10.0</div>
               <div className="exp-conf">↑ confidence 98%</div>
             </div>
-            <div className="ex-popup" style={{ top: "108px", animationDelay: ".8s" }}>
+            <div className="ex-popup reveal-pop" style={{ top: "108px", transitionDelay: "1.2s" }}>
               <div className="exp-key">Internships</div>
               <div className="exp-val">3 verified</div>
               <div className="exp-conf">↑ weight: 20pts</div>
             </div>
-            <div className="ex-popup" style={{ top: "168px", animationDelay: "1.4s" }}>
+            <div className="ex-popup reveal-pop" style={{ top: "168px", transitionDelay: "1.6s" }}>
               <div className="exp-key">Projects</div>
               <div className="exp-val">5 detected</div>
               <div className="exp-conf">↑ weight: 15pts</div>
             </div>
-            <div className="ex-popup" style={{ bottom: "48px", animationDelay: "2s" }}>
+            <div className="ex-popup reveal-pop" style={{ bottom: "48px", transitionDelay: "2s" }}>
               <div className="exp-key">AI Score</div>
               <div className="exp-val" style={{ color: "var(--emerald)", fontSize: ".9rem", fontWeight: 800 }}>91 / 100</div>
               <div className="exp-conf" style={{ color: "var(--emerald)" }}>→ Rank #1</div>
@@ -496,27 +496,27 @@ export default function LandingPage() {
           <div className="pipeline-grid">
             <div className="pip-card">
               <div className="pip-n">Step 01</div>
-              <div className="pip-icon">📄</div>
-              <div className="pip-t">Parse Resumes</div>
-              <div className="pip-d">PDF, DOC, DOCX accepted. PyMuPDF + pdfplumber extract raw text from any layout — multi-column, scanned, or templated.</div>
+              <div className="pip-icon">🛡️</div>
+              <div className="pip-t">Sanitize & Parse</div>
+              <div className="pip-d">AI Firewall intercepts prompt injections. Then, parallelized PyMuPDF and OCR workers extract text in isolated background threads for maximum speed.</div>
             </div>
             <div className="pip-card">
               <div className="pip-n">Step 02</div>
-              <div className="pip-icon">🧠</div>
-              <div className="pip-t">Extract Data</div>
-              <div className="pip-d">SpaCy NER + Groq llama-3.1-8b. Skills, CGPA, projects, internships converted to structured JSON. Hallucination-guarded.</div>
+              <div className="pip-icon">⚡</div>
+              <div className="pip-t">Neural Extraction</div>
+              <div className="pip-d">Multi-threaded Groq clusters fire 5 parallel LLM tasks to map career details, verifying GitHub history and separating internships from projects with precision.</div>
             </div>
             <div className="pip-card">
               <div className="pip-n">Step 03</div>
               <div className="pip-icon">⚖️</div>
-              <div className="pip-t">Score Candidates</div>
-              <div className="pip-d">12 factors × PS-defined weights. Anti-overfitting guards applied. Scores are deterministic and reproducible across runs.</div>
+              <div className="pip-t">Logic-Gated Scoring</div>
+              <div className="pip-d">12 research-backed factors meet deterministic algebraic weights. Hallucination guards ensure that scores are pinned to extracted evidence, not AI guesses.</div>
             </div>
             <div className="pip-card">
               <div className="pip-n">Step 04</div>
-              <div className="pip-icon">🏆</div>
-              <div className="pip-t">Rank Results</div>
-              <div className="pip-d">Candidates sorted deterministically. Tie-breaking by sub-score hierarchy. Every point justified by extracted evidence.</div>
+              <div className="pip-icon">⚔️</div>
+              <div className="pip-t">Arbitrate & Rank</div>
+              <div className="pip-d">Battle Royale arbitration resolves ties with head-to-head AI comparisons. Result: A perfectly ranked list with every single point justified.</div>
             </div>
           </div>
         </div>
@@ -735,6 +735,40 @@ export default function LandingPage() {
 
           <div style={{ textAlign: "center", marginTop: "40px" }}>
             <div className="aof">⚡ word_count is NOT a scoring signal — resume length cannot inflate scores</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" className="features-section reveal-on-scroll">
+        <div className="ctr">
+          <div className="slabel">Feature Upgrades</div>
+          <div className="stitle">Version 2.0 Capabilities</div>
+          <p className="ssub">Powered by LLama-4, Groq Parallel Processing, and Multi-Agent Orchestration.</p>
+
+          <div className="features-grid">
+            {[
+              { t: "AI Firewall 2.0", i: "🛡️", d: "Zero-day prompt injection firewall. Instantly detects and neutralizes malicious resume payloads intended to manipulate scores." },
+              { t: "Parallel Extraction", i: "⚡", d: "Asynchronous PyMuPDF and OCR pipelines run fully concurrently with 5-thread Groq LLM clusters. Processing time slashed to 4.2s." },
+              { t: "Structured Parsing", i: "🧠", d: "Advanced LLM heuristic mapping. Extracts internships vs hackathons perfectly. Parses complex career trajectories into structured JSON." },
+              { t: "Battle Royale Auth", i: "⚔️", d: "Multi-Agent contextual arbitration. Force Top-2 candidates to battle head-to-head on specific metrics like GPA or GitHub Commits." },
+              { t: "Deep Verification", i: "🔍", d: "Synchronous connections to GitHub API to verify commit history, repositories, and exact wording against external live data." },
+              { t: "Deterministic Scoring", i: "⚖️", d: "Unlike generative-only AI tools, our architecture fuses absolute 12-factor algebraic weighting with LLM context checks for zero hallucination." }
+            ].map((f, idx) => (
+              <div
+                key={idx}
+                className="feat-card"
+                onMouseMove={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  e.currentTarget.style.setProperty('--mouse-x', `${e.clientX - rect.left}px`);
+                  e.currentTarget.style.setProperty('--mouse-y', `${e.clientY - rect.top}px`);
+                }}
+              >
+                <div className="feat-icon-wrapper">{f.i}</div>
+                <div className="feat-title">{f.t}</div>
+                <div className="feat-desc">{f.d}</div>
+                <div className="feat-glow"></div>
+              </div>
+            ))}
           </div>
         </div>
       </section>

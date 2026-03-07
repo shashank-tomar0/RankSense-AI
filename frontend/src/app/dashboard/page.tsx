@@ -363,10 +363,10 @@ export default function DashboardPage() {
   })();
 
   const HOW_IT_WORKS_SLIDES = [
-    { icon: <Scan className="w-6 h-6 text-[var(--cyan)]" />, title: "VISUAL OCR PIPELINE", desc: "Each PDF is rendered as a 300 DPI image using PyMuPDF — exactly what a human eye would see. Tesseract OCR then reads the visible text. Hidden white text, invisible keywords, and background-matching text are automatically excluded.", steps: ["PDF → PyMuPDF renders each page as image", "Tesseract OCR reads visible text only", "pdfplumber extracts ALL raw text (including hidden)", "If raw text >> OCR text → hidden stuffing detected"] },
-    { icon: <Target className="w-6 h-6 text-[var(--emerald)]" />, title: "SCORING METHODOLOGY", desc: "12 weighted criteria scored against the Job Description, totaling 100 points max.", steps: ["Prior Internships: 20 pts | Technical Skills: 20 pts", "Projects: 15 pts | CGPA/Academic: 10 pts", "Quantifiable Achievements: 10 pts | Work Experience: 5 pts", "Extra-Curricular: 5 pts | Degree Quality: 3 pts", "Online Presence: 3 pts | Language Fluency: 3 pts", "College Tier: 2 pts | School Marks: 2 pts"] },
-    { icon: <Shield className="w-6 h-6 text-[var(--rose)]" />, title: "ANTI-MANIPULATION ENGINE", desc: "A multi-layer defense system detects prompt injection and keyword stuffing.", steps: ["Hidden text detection via OCR vs raw text comparison", "AI firewall analyzes text for injection commands", "Keyword stuffing: 30+ uncontextualized keywords flagged", "Microscopic text (<5.5pt) automatically filtered", "Background-matching color text stripped"] },
-    { icon: <TrendingUp className="w-6 h-6 text-[var(--violet)]" />, title: "AUTHENTICITY INDEX", desc: "Cross-references resume claims against public data for verification.", steps: ["GitHub profile verified: repos, followers, activity", "Portfolio links checked for existence", "Trust score (0-100) based on verified vs claimed skills", "Low authenticity → AI summary warns recruiters", "Culture fit assessed via AI behavioral analysis"] },
+    { icon: <Scan className="w-6 h-6 text-[var(--cyan)]" />, title: "DUAL-ENGINE EXTRACTION", desc: "Two extraction engines with font-level metadata analysis and OCR fallback for scanned documents.", steps: ["PyMuPDF dict-level extraction reads font color, size & position per span", "pdfplumber extracts layout text + embedded hyperlinks", "Tesseract OCR @ 200 DPI activates for scanned/image PDFs", "Encrypted/locked PDFs auto-detected and flagged", "DOCX, DOC (win32com), and TXT formats supported"] },
+    { icon: <Shield className="w-6 h-6 text-[var(--rose)]" />, title: "7-LAYER SECURITY FIREWALL", desc: "Forensic defense system with font-level fraud detection and AI-powered security analysis.", steps: ["Two-pass dark-mode detection (>15% white chars = dark theme, prevents false flags)", "Invisible white text (0xFFFFFF) filtered on non-dark-mode docs", "Microscopic font (<4pt) automatically stripped", "Regex injection scanner for prompt manipulation", "LLM AI Firewall analyzes full text for manipulation patterns", "Duplicate detection via cosine similarity (>90% = flagged)", "Keyword density sanitizer (25+ repeats → redacted)"] },
+    { icon: <Target className="w-6 h-6 text-[var(--emerald)]" />, title: "12-FACTOR SCORING + BONUSES", desc: "Deterministic 100-point scale with prestige multipliers and consistency checks.", steps: ["Internships: 20 pts | Technical Skills: 20 pts (with partial credit)", "Projects: 15 pts | CGPA/Academic: 10 pts | Achievements: 10 pts", "Experience: 5 pts | Extra-Curricular: 5 pts | Degree: 3 pts", "Online Presence: 3 pts | Languages: 3 pts | College: 2 pts | School: 2 pts", "Prestige Multiplier: +8% FAANG/Tier-1 | +4% Tier-2 | +5% Tier-1 colleges", "Skill-Project Consistency: up to +3 pts for verified skill usage", "Completeness Bonus: +4% per section (projects, achievements, links, languages)"] },
+    { icon: <TrendingUp className="w-6 h-6 text-[var(--violet)]" />, title: "PARALLEL AI ANALYSIS", desc: "6 concurrent Groq LLaMA-3.1 tasks fired simultaneously via asyncio.gather.", steps: ["Personal info extraction + GitHub trust chain verification", "AI Hireability Synthesis (Markdown forensic report)", "AI Interview Script (10 personalized screening questions)", "Soft skills + Culture Fit analysis (0-100%)", "Training Roadmap + upsell recommendations", "LLM Security Firewall (manipulation detection)"] },
   ];
 
   const signOutFn = () => signOut({ redirectUrl: "/" });
@@ -1210,11 +1210,11 @@ export default function DashboardPage() {
                             )}
 
                             {/* Internships */}
-                            {selected.structured_data.internships && (selected.structured_data.internships.count || 0) > 0 && (
+                            {selected.structured_data.internships && ((selected.structured_data.internships.count || 0) > 0 || (selected.structured_data.internships.details && selected.structured_data.internships.details.length > 0)) && (
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2 mb-2">
                                   <div className="w-1.5 h-1.5 rounded-full bg-[var(--violet)]" />
-                                  <span className="text-[10px] font-black text-[var(--violet)] uppercase tracking-widest">Internships ({selected.structured_data.internships.count})</span>
+                                  <span className="text-[10px] font-black text-[var(--violet)] uppercase tracking-widest">Internships {selected.structured_data.internships.count > 0 ? `(${selected.structured_data.internships.count})` : ''}</span>
                                 </div>
                                 {selected.structured_data.internships.details && selected.structured_data.internships.details.length > 0 ? (
                                   <div className="ml-4 space-y-1.5">
@@ -1232,11 +1232,11 @@ export default function DashboardPage() {
                             )}
 
                             {/* Projects */}
-                            {selected.structured_data.projects && (selected.structured_data.projects.count || 0) > 0 && (
+                            {selected.structured_data.projects && ((selected.structured_data.projects.count || 0) > 0 || (selected.structured_data.projects.titles && selected.structured_data.projects.titles.length > 0)) && (
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2 mb-2">
                                   <div className="w-1.5 h-1.5 rounded-full bg-[var(--emerald)]" />
-                                  <span className="text-[10px] font-black text-[var(--emerald)] uppercase tracking-widest">Projects ({selected.structured_data.projects.count})</span>
+                                  <span className="text-[10px] font-black text-[var(--emerald)] uppercase tracking-widest">Projects {selected.structured_data.projects.count > 0 ? `(${selected.structured_data.projects.count})` : ''}</span>
                                 </div>
                                 {selected.structured_data.projects.titles && selected.structured_data.projects.titles.length > 0 ? (
                                   <div className="ml-4 space-y-1.5">
@@ -1254,13 +1254,13 @@ export default function DashboardPage() {
                             )}
 
                             {/* Experience */}
-                            {selected.structured_data.experience && ((selected.structured_data.experience.years || 0) > 0 || (selected.structured_data.experience.count || 0) > 0) && (
+                            {selected.structured_data.experience && ((selected.structured_data.experience.years || 0) > 0 || (selected.structured_data.experience.count || 0) > 0 || (selected.structured_data.experience.details && selected.structured_data.experience.details.length > 0)) && (
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2 mb-2">
                                   <div className="w-1.5 h-1.5 rounded-full bg-[var(--cyan)]" />
                                   <span className="text-[10px] font-black text-[var(--cyan)] uppercase tracking-widest">Work Experience</span>
                                 </div>
-                                <div className="ml-4 flex gap-3">
+                                <div className="ml-4 flex gap-3 mb-2">
                                   {(selected.structured_data.experience.years || 0) > 0 && (
                                     <span className="text-[10px] text-white/60 bg-white/[0.03] border border-white/5 px-3 py-1.5 rounded-lg">
                                       <span className="font-bold text-white/80">{selected.structured_data.experience.years}</span> years
@@ -1272,6 +1272,16 @@ export default function DashboardPage() {
                                     </span>
                                   )}
                                 </div>
+                                {selected.structured_data.experience.details && selected.structured_data.experience.details.length > 0 && (
+                                  <div className="ml-4 space-y-1.5 mt-1">
+                                    {selected.structured_data.experience.details.map((d, i) => (
+                                      <div key={i} className="flex items-start gap-2 text-[10px] text-white/60 bg-white/[0.02] border border-white/5 rounded-lg p-3">
+                                        <span className="text-[var(--cyan)] font-black shrink-0">■</span>
+                                        <span className="leading-relaxed">{d}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                             )}
 
