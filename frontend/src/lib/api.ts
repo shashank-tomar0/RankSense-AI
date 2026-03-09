@@ -53,7 +53,7 @@ export interface Candidate {
     extracurricular_count?: number;
     hackathon_count?: number;
     hackathons?: { count?: number; details?: string[] };
-    online_links?: { github?: boolean; linkedin?: boolean; portfolio?: boolean };
+    online_links?: { github?: boolean | string; linkedin?: boolean | string; portfolio?: boolean | string };
     github_username?: string;
     skill_domains?: Record<string, string[]>;
   } | null;
@@ -81,8 +81,9 @@ export async function deleteCandidates(userId: string): Promise<any> {
   }
 }
 
-export async function uploadResume(file: File, jdText?: string, companyValues?: string, userId?: string, customWeights?: Record<string, number>): Promise<void> {
+export async function uploadResume(file: File, jdText?: string, companyValues?: string, userId?: string, customWeights?: Record<string, number>, useCache: boolean = true): Promise<void> {
   const form = new FormData();
+  form.append("use_cache", useCache.toString());
   form.append("file", file);
   if (jdText) form.append("jd_text", jdText);
   if (companyValues) form.append("company_values", companyValues);

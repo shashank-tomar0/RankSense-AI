@@ -101,6 +101,7 @@ export default function DashboardPage() {
     school_marks: 0
   });
 
+  const [useCache, setUseCache] = useState(true);
   const [professionFilter, setProfessionFilter] = useState("All");
   const [showFraudLog, setShowFraudLog] = useState(false);
 
@@ -176,7 +177,7 @@ export default function DashboardPage() {
     for (const f of fileList) {
       addLog(`> Uploading: ${f.name}`);
       try {
-        await uploadResume(f, jd, companyValues, user.id, customWeights);
+        await uploadResume(f, jd, companyValues, user.id, customWeights, useCache);
         addLog(`✓ Uploaded: ${f.name}`);
       } catch (err: any) {
         addLog(`! Failed: ${f.name}`);
@@ -582,6 +583,10 @@ export default function DashboardPage() {
                         <span className="text-xs font-black text-[var(--emerald)]">4</span>
                       </div>
                       <h3 className="text-sm font-bold text-[var(--text)] tracking-tight">Upload Resumes</h3>
+                      <div onClick={(e) => e.stopPropagation()} className="ml-auto flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-lg border border-white/5 hover:border-[var(--emerald)]/30 transition-colors">
+                        <input type="checkbox" id="cacheToggle" checked={useCache} onChange={(e) => setUseCache(e.target.checked)} className="w-3 h-3 accent-[var(--emerald)] cursor-pointer" />
+                        <label htmlFor="cacheToggle" className="text-[9px] uppercase font-bold text-[var(--emerald)] tracking-[0.2em] cursor-pointer">Neural Cache</label>
+                      </div>
                     </div>
                     <div className="flex-1 flex flex-col items-center justify-center">
                       <Upload className="w-8 h-8 text-[var(--muted)] group-hover:text-[var(--emerald)] transition-all mb-3 group-hover:scale-110" />
@@ -1417,15 +1422,29 @@ export default function DashboardPage() {
                                 </div>
                                 <div className="ml-4 flex gap-2">
                                   {selected.structured_data.online_links.github && (
-                                    <span className="text-[9px] font-bold text-white/70 bg-white/5 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-1.5">
-                                      <Github className="w-3 h-3" /> GitHub {selected.structured_data.github_username && <span className="text-[var(--cyan)]">@{selected.structured_data.github_username}</span>}
-                                    </span>
+                                    typeof selected.structured_data.online_links.github === 'string' ? (
+                                      <a href={selected.structured_data.online_links.github} target="_blank" rel="noreferrer" className="text-[9px] font-bold text-white/70 bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-1.5 transition-colors cursor-pointer hover:underline">
+                                        <Github className="w-3 h-3" /> GitHub {selected.structured_data.github_username && <span className="text-[var(--cyan)]">@{selected.structured_data.github_username}</span>}
+                                      </a>
+                                    ) : (
+                                      <span className="text-[9px] font-bold text-white/70 bg-white/5 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-1.5">
+                                        <Github className="w-3 h-3" /> GitHub {selected.structured_data.github_username && <span className="text-[var(--cyan)]">@{selected.structured_data.github_username}</span>}
+                                      </span>
+                                    )
                                   )}
                                   {selected.structured_data.online_links.linkedin && (
-                                    <span className="text-[9px] font-bold text-blue-400/80 bg-blue-400/10 px-3 py-1.5 rounded-lg border border-blue-400/20">LinkedIn</span>
+                                    typeof selected.structured_data.online_links.linkedin === 'string' ? (
+                                      <a href={selected.structured_data.online_links.linkedin} target="_blank" rel="noreferrer" className="text-[9px] font-bold text-blue-400/80 bg-blue-400/10 hover:bg-blue-400/20 px-3 py-1.5 rounded-lg border border-blue-400/20 transition-colors cursor-pointer hover:underline">LinkedIn</a>
+                                    ) : (
+                                      <span className="text-[9px] font-bold text-blue-400/80 bg-blue-400/10 px-3 py-1.5 rounded-lg border border-blue-400/20">LinkedIn</span>
+                                    )
                                   )}
                                   {selected.structured_data.online_links.portfolio && (
-                                    <span className="text-[9px] font-bold text-teal-400/80 bg-teal-400/10 px-3 py-1.5 rounded-lg border border-teal-400/20">Portfolio</span>
+                                    typeof selected.structured_data.online_links.portfolio === 'string' ? (
+                                      <a href={selected.structured_data.online_links.portfolio} target="_blank" rel="noreferrer" className="text-[9px] font-bold text-teal-400/80 bg-teal-400/10 hover:bg-teal-400/20 px-3 py-1.5 rounded-lg border border-teal-400/20 transition-colors cursor-pointer hover:underline">Portfolio</a>
+                                    ) : (
+                                      <span className="text-[9px] font-bold text-teal-400/80 bg-teal-400/10 px-3 py-1.5 rounded-lg border border-teal-400/20">Portfolio</span>
+                                    )
                                   )}
                                 </div>
                               </div>
