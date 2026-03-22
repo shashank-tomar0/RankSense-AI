@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import {
   Candidate, fetchCandidates, deleteCandidates,
   uploadResume, generateEmail, generateJD, chatWithResume,
-  compareCandidates, generateInterview, generateOutreach, sendDirectEmail, ComparisonResult, InterviewScript,
+  compareCandidates, generateInterview, generateOutreach, sendDirectEmail, regenerateAnalysis, ComparisonResult, InterviewScript,
   WS_URL, API_URL
 } from "@/lib/api";
 
@@ -105,6 +105,7 @@ export default function DashboardPage() {
   const [useCache, setUseCache] = useState(true);
   const [professionFilter, setProfessionFilter] = useState("All");
   const [showFraudLog, setShowFraudLog] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -280,6 +281,29 @@ export default function DashboardPage() {
   const toggleSelect = (hash: string) => {
     if (!hash) return;
     setSelectedIds(p => p.includes(hash) ? p.filter(x => x !== hash) : [...p, hash]);
+  };
+
+  const startAnalysisRegeneration = async () => {
+    if (!selected) return addLog("! No candidate selected.");
+    if (!selected.file_hash && !selected.id) return addLog("! Candidate missing ID/Hash.");
+
+    setIsRegenerating(true);
+    try {
+      const updatedCandidate = await regenerateAnalysis(selected.id, selected.file_hash, jd);
+      if (updatedCandidate.error) throw new Error(updatedCandidate.error);
+      
+      setCandidates(prev => {
+        const next = [...prev];
+        const idx = next.findIndex(c => c.id === updatedCandidate.id || c.file_hash === updatedCandidate.file_hash);
+        if (idx !== -1) next[idx] = updatedCandidate;
+        return next;
+      });
+      setSelected(updatedCandidate);
+      addLog(`✓ Deep AI Analysis completed for ${updatedCandidate.name || 'candidate'}`);
+    } catch (e: any) {
+      addLog(`! Analysis Regeneration failed: ${e.message}`);
+    }
+    setIsRegenerating(false);
   };
 
   const startInterviewPilot = async () => {
@@ -976,9 +1000,23 @@ export default function DashboardPage() {
                     {selected.hireability_summary && (
                       <div className="bg-[var(--violet)]/5 border border-[var(--violet)]/20 p-8 rounded-2xl relative group">
                         <div className="absolute top-0 left-0 w-1 h-full bg-[var(--violet)]" />
-                        <p className="text-[11px] font-black text-[var(--violet)] uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                          <Sparkles className="w-4 h-4" /> AI ANALYSIS SYNTHESIS
-                        </p>
+                        <div className="flex items-center justify-between mb-6">
+                          <p className="text-[11px] font-black text-[var(--violet)] uppercase tracking-[0.3em] flex items-center gap-2 m-0">
+                            <Sparkles className="w-4 h-4" /> AI ANALYSIS SYNTHESIS
+                          </p>
+                          {(selected.hireability_summary.includes("NEURAL FALLBACK ACTIVE") || 
+                            !selected.soft_skills?.length || 
+                            (selected.soft_skills.length === 2 && selected.soft_skills.includes("Problem Solving") && (selected.soft_skills.includes("Communication") || selected.soft_skills.includes("Collaboration")))) && (
+                            <button
+                              onClick={startAnalysisRegeneration}
+                              disabled={isRegenerating}
+                              className="px-3 py-1.5 rounded-lg bg-[var(--violet)]/10 border border-[var(--violet)] text-[10px] font-black text-[var(--violet)] hover:bg-[var(--violet)] hover:text-white transition-all flex items-center gap-2 uppercase tracking-wide disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_15px_rgba(124,58,237,0.3)]"
+                            >
+                              {isRegenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                              {isRegenerating ? "GENERATING..." : "RUN DEEP AI ANALYSIS"}
+                            </button>
+                          )}
+                        </div>
                         <div className="text-[13px] text-white/90 prose prose-invert prose-compact max-w-none">
                           <ReactMarkdown>{selected.hireability_summary}</ReactMarkdown>
                         </div>

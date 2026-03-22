@@ -201,3 +201,13 @@ export async function sendDirectEmail(toEmail: string, subject: string, body: st
     return { error: errValue.message || "Network error" };
   }
 }
+
+export async function regenerateAnalysis(id: number | undefined, fileHash?: string, jdText: string = ""): Promise<any> {
+  const res = await fetch(`${API}/regenerate_analysis`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidate_id: id || null, file_hash: fileHash || null, jd_text: jdText }),
+  });
+  if (!res.ok) throw new Error("Regeneration failed");
+  return res.json();
+}

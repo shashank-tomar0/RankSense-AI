@@ -646,8 +646,8 @@ def generate_hireability_summary_fallback(score: float, analysis: dict, breakdow
         proj_note = " Their strong project portfolio is a significant asset."
     else:
         proj_note = ""
-        
-    return f"{intro}{technical_note}{proj_note}"
+    fallback_warning = "> **NEURAL FALLBACK ACTIVE**: Circuit breaker engaged. Standard heuristic scoring applied. Full AI analysis is recommended.\n\n"
+    return f"{fallback_warning}{intro}{technical_note}{proj_note}"
 
 async def generate_hireability_summary_llm(score: float, analysis: dict, breakdown: dict, jd_text: str = "", jd_present: bool = False) -> str:
     if not groq_client:
@@ -755,7 +755,7 @@ async def generate_interview_questions_llm(analysis: dict, resume_skills: list, 
 
 async def generate_soft_skills_llm(text: str, company_values: str = "") -> dict:
     if not groq_client:
-        return {"soft_skills": ["Teamwork", "Communication"], "culture_fit": 75}
+        return {"soft_skills": [], "culture_fit": 0}
         
     try:
         snippet = text[:4000] # Limit to avoid exceeding tokens
@@ -780,7 +780,7 @@ async def generate_soft_skills_llm(text: str, company_values: str = "") -> dict:
         """
         
         content = await call_groq_with_retry(prompt, model="llama-3.3-70b-versatile", temperature=0.3, max_tokens=200)
-        if not content: return {"soft_skills": ["Problem Solving", "Communication"], "culture_fit": 80}
+        if not content: return {"soft_skills": [], "culture_fit": 0}
         
         import json
         parsed = json.loads(content)
@@ -801,7 +801,7 @@ async def generate_soft_skills_llm(text: str, company_values: str = "") -> dict:
         }
     except Exception as e:
         print(f"Groq Soft Skills Error: {e}")
-        return {"soft_skills": ["Problem Solving", "Collaboration"], "culture_fit": 80}
+        return {"soft_skills": [], "culture_fit": 0}
 
 async def check_prompt_injection(text: str) -> bool:
     """Uses a smaller/faster LLM call to act as a Firewall against Prompt Injection and Keyword Stuffing."""
@@ -3121,6 +3121,73 @@ async def compare_candidates(req: CompareRequest):
         if not res.get("arbitration_summary"): res["arbitration_summary"] = "Comparative analysis complete."
         return res
     except Exception as e:
+        return {"error": str(e)}
+
+class RegenerateRequest(BaseModel):
+    candidate_id: Optional[int] = None
+    file_hash: Optional[str] = None
+    jd_text: Optional[str] = ""
+
+@app.post("/regenerate_analysis")
+async def regenerate_analysis(req: RegenerateRequest):
+    """Regenerates the LLM hireability and soft-skills for a circuit-broken candidate."""
+    if not groq_client: return {"error": "AI Engine Offline"}
+    
+    conn = sqlite3.connect(DB_NAME, timeout=30.0)
+    c = conn.cursor()
+    row = None
+    if req.file_hash:
+        row = c.execute("SELECT id, data_json FROM candidates WHERE file_hash = ?", (req.file_hash,)).fetchone()
+    if not row and req.candidate_id:
+        row = c.execute("SELECT id, data_json FROM candidates WHERE id = ?", (req.candidate_id,)).fetchone()
+        
+    if not row:
+        conn.close()
+        return {"error": "Candidate not found"}
+        
+    cand_id, data_json = row
+    data = json.loads(data_json)
+    
+    raw_text = data.get("raw_text", "")
+    score = data.get("score", 0)
+    analysis = data.get("jd_analysis", {})
+    breakdown = data.get("score_breakdown", {})
+    
+    existing_questions = data.get("interview_questions", [])
+    needs_interview = not existing_questions or "Could you describe your most challenging recent project?" in str(existing_questions)
+    
+    try:
+        tasks = [
+            generate_hireability_summary_llm(score, analysis, breakdown, req.jd_text, bool(req.jd_text)),
+            generate_soft_skills_llm(raw_text, "")
+        ]
+        if needs_interview:
+            tasks.append(generate_interview_questions_llm(analysis, data.get("skills", []), bool(req.jd_text)))
+            
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Unpack results based on task count
+        summary = results[0]
+        soft_skills_map = results[1]
+        interview_res = results[2] if needs_interview else None
+        
+        if not isinstance(summary, Exception):
+            data["hireability_summary"] = summary
+        if not isinstance(soft_skills_map, Exception):
+            data["soft_skills"] = soft_skills_map.get("soft_skills", [])
+            data["culture_fit"] = soft_skills_map.get("culture_fit", 0)
+        if needs_interview and not isinstance(interview_res, Exception):
+            data["interview_questions"] = interview_res
+            
+        c.execute("UPDATE candidates SET data_json=? WHERE id=?", (json.dumps(data), cand_id))
+        conn.commit()
+        conn.close()
+        
+        # Ensure the frontend gets the ID properly
+        data["id"] = cand_id
+        return data
+    except Exception as e:
+        conn.close()
         return {"error": str(e)}
 
 @app.post("/generate_interview")
